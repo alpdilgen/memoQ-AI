@@ -12,7 +12,8 @@ from services.embedding_matcher import EmbeddingMatcher, get_embedding_cost_esti
 from utils.xml_parser import XMLParser
 from utils.logger import TransactionLogger
 import config
-
+from services.memoq_server_client import MemoQServerClient
+from services.memoq_ui import MemoQUI
 # --- Setup ---
 st.set_page_config(page_title=config.APP_NAME, layout="wide", page_icon="🌍")
 

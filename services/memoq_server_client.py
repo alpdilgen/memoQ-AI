@@ -36,12 +36,22 @@ class MemoQServerClient:
             verify_ssl: SSL certificate verification
             timeout: Request timeout
         """
-        self.server_url = server_url.rstrip('/')
+        # Allow users to paste either the tenant root (recommended) or a URL
+        # that already includes the memoQ REST base path. We normalize here to
+        # avoid double-including "/memoqserverhttpapi/v1" which would break
+        # authentication (e.g., .../memoqserverhttpapi/v1/memoqserverhttpapi/v1/auth/login).
+        self.base_path = "/memoqserverhttpapi/v1"
+        normalized_url = server_url.rstrip('/')
+        for suffix in (self.base_path, "/memoqserverhttpapi"):
+            if normalized_url.endswith(suffix):
+                normalized_url = normalized_url[: -len(suffix)].rstrip('/')
+                break
+
+        self.server_url = normalized_url
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
         self.timeout = timeout
-        self.base_path = "/memoqserverhttpapi/v1"
         
         self.token = None
         self.token_expiry = None
@@ -58,8 +68,9 @@ class MemoQServerClient:
             "Password": self.password,
             "LoginMode": 0
         }
-        
+
         try:
+            logger.info("memoQ login endpoint: %s", url)
             response = requests.post(
                 url,
                 json=payload,

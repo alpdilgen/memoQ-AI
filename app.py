@@ -687,8 +687,8 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
-            # Check memoQ TMs if available - DISABLED (use local TM file instead)
-            elif False and memoq_client and memoq_tm_guids:
+            # Check memoQ TMs if available
+            elif memoq_client and memoq_tm_guids:
                 try:
                     for tm_guid in memoq_tm_guids:
                         results = None
@@ -764,8 +764,8 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 tb_matches = tb_matcher.extract_matches(seg.source)
                 if tb_matches:
                     tb_context[seg.id] = tb_matches
-            # Check memoQ TBs if available - DISABLED
-            elif False and memoq_client and memoq_tb_guids and seg in llm_segments:
+            # Check memoQ TBs if available
+            elif memoq_client and memoq_tb_guids and seg in llm_segments:
                 try:
                     for tb_guid in memoq_tb_guids:
                         tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])

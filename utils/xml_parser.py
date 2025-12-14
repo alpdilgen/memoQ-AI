@@ -198,6 +198,10 @@ class XMLParser:
             seg_id = trans_unit.get('id')
             
             if seg_id in translations:
+                # Get source text for match reference
+                source_node = trans_unit.find("x:source", ns)
+                source_text = "".join(source_node.itertext()) if source_node is not None else ""
+                
                 target = trans_unit.find("x:target", ns)
                 if target is None:
                     target = ET.SubElement(trans_unit, "{urn:oasis:names:tc:xliff:document:1.2}target")
@@ -217,18 +221,50 @@ class XMLParser:
                     # Fallback if no tags mapped
                     target.text = trans_text
                 
-                # Update status
-                for key in list(trans_unit.attrib.keys()):
-                    if "status" in key:
-                        trans_unit.attrib[key] = "Translated"
+                # Update status to "Translated"
+                trans_unit.attrib['{MQXliff}status'] = "Translated"
                 
-                # Add memoQ commit metadata
+                # Get match rate (100 for TM, 0 for LLM)
                 match_rate = match_rates.get(seg_id, 0)
-                trans_unit.attrib['{MQXliff}translatorcommitmatchrate'] = str(int(match_rate))
-                trans_unit.attrib['{MQXliff}translatorcommitusername'] = username
-                trans_unit.attrib['{MQXliff}translatorcommittimestamp'] = current_timestamp
-                trans_unit.attrib['{MQXliff}lastchangedtimestamp'] = current_timestamp
-                trans_unit.attrib['{MQXliff}lastchanginguser'] = username
+                trans_unit.attrib['{MQXliff}percent'] = str(int(match_rate))
+                
+                # Add/update memoQ commitinfos element
+                commit_infos = trans_unit.find("mq:commitinfos", ns)
+                if commit_infos is None:
+                    commit_infos = ET.SubElement(trans_unit, "{MQXliff}commitinfos")
+                else:
+                    # Clear existing commit infos
+                    for child in list(commit_infos):
+                        commit_infos.remove(child)
+                
+                # Add commit info element
+                commit_info = ET.SubElement(commit_infos, "commitinfo")
+                commit_info.attrib['matchrate'] = str(int(match_rate))
+                commit_info.attrib['role'] = "1000"
+                commit_info.attrib['timestamp'] = current_timestamp
+                commit_info.attrib['username'] = username
+                commit_info.attrib['editingtime'] = "0"
+                
+                # Add inserted match element if it's a TM match (match_rate > 0)
+                if match_rate > 0:
+                    inserted_match = ET.SubElement(trans_unit, "{MQXliff}insertedmatch")
+                    inserted_match.attrib['matchtype'] = "0"
+                    inserted_match.attrib['source'] = "AnovaAI memoQ Integration"
+                    inserted_match.attrib['matchrate'] = str(int(match_rate))
+                    inserted_match.attrib['originalmatchrate'] = str(int(match_rate))
+                    inserted_match.attrib['ambiguousexact'] = "false"
+                    inserted_match.attrib['setsegmentswhensplittingintorows'] = "false"
+                    inserted_match.attrib['hitfororiginalsegementversion'] = "false"
+                    
+                    # Add source element
+                    src_elem = ET.SubElement(inserted_match, "{urn:oasis:names:tc:xliff:document:1.2}source")
+                    src_elem.attrib['{http://www.w3.org/XML/1998/namespace}space'] = "preserve"
+                    src_elem.text = source_text
+                    
+                    # Add target element
+                    tgt_elem = ET.SubElement(inserted_match, "{urn:oasis:names:tc:xliff:document:1.2}target")
+                    tgt_elem.attrib['{http://www.w3.org/XML/1998/namespace}space'] = "preserve"
+                    tgt_elem.text = trans_text
 
         # Final string generation and repair
         output_str = ET.tostring(root, encoding='unicode')

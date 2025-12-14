@@ -123,9 +123,12 @@ class MemoQServerClient:
                     timeout=self.timeout
                 )
             elif method == "POST":
+                import json
+                # Use custom JSON encoding with ensure_ascii=False to preserve & character
+                json_data = json.dumps(data, ensure_ascii=False)
                 response = requests.post(
                     url,
-                    json=data,
+                    data=json_data,
                     params=request_params,
                     headers=headers,
                     verify=self.verify_ssl,
@@ -183,6 +186,9 @@ class MemoQServerClient:
         segments: List[str]
     ) -> Dict:
         """Lookup segments in Translation Memory"""
+        # No special encoding needed for JSON - requests library handles it correctly
+        # The HTTP 500 errors might be from memoQ server issues, not encoding
+        
         segment_objects = [
             {"Segment": seg}
             for seg in segments

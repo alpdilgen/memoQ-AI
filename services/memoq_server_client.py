@@ -164,6 +164,13 @@ class MemoQServerClient:
                     f"HTTP {response.status_code}: {str(e)} | Response: {response_text}"
                 )
 
+                raise Exception(f"{error_code}: {error_msg}")
+            except Exception:
+                # If response is not JSON, include text for context
+                raise Exception(
+                    f"HTTP {response.status_code}: {str(e)} | Response: {response.text}"
+                )
+        
         except Exception as e:
             raise Exception(f"Request failed: {str(e)}")
     
@@ -215,6 +222,10 @@ class MemoQServerClient:
                 "Segment": seg,
                 "SourceSegment": f"<seg>{seg}</seg>",
             })
+        segment_objects = [
+            {"Segment": seg}
+            for seg in segments
+        ]
 
         endpoint = f"/tms/{tm_guid}/lookupsegments"
 

@@ -510,7 +510,7 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 
 # --- Main Translation Logic ---
 
-def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None):
+def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
     if not api_key:
         st.error("Please provide an API Key.")
         return
@@ -573,6 +573,22 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             st.write(f"✅ Termbase Ready: {tb_matcher.term_count:,} terms")
             logger.info(f"Termbase loaded: {tb_matcher.term_count} terms (columns: {tb_matcher.src_col} → {tb_matcher.tgt_col})")
         
+        # 3.5 Initialize memoQ Server client if TMs/TBs selected
+        memoq_client = None
+        if memoq_tm_guids or memoq_tb_guids:
+            try:
+                if st.session_state.get('memoq_client'):
+                    memoq_client = st.session_state.memoq_client
+                    st.write(f"🔗 Using memoQ Server TM/TB resources")
+                    if memoq_tm_guids:
+                        st.write(f"   • {len(memoq_tm_guids)} Translation Memory(ies)")
+                    if memoq_tb_guids:
+                        st.write(f"   • {len(memoq_tb_guids)} Termbase(s)")
+                    logger.info(f"memoQ Server: {len(memoq_tm_guids)} TMs, {len(memoq_tb_guids)} TBs")
+            except Exception as e:
+                st.warning(f"Could not connect to memoQ Server: {str(e)}")
+                logger.warning(f"memoQ connection error: {e}")
+        
         # 4. Initialize Prompt Builder
         # Priority: Generated prompt > Custom file > Default
         if st.session_state.use_generated_prompt and st.session_state.generated_prompt:
@@ -615,6 +631,29 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
+            # Check memoQ TMs if available
+            elif memoq_client and memoq_tm_guids:
+                try:
+                    for tm_guid in memoq_tm_guids:
+                        results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                        if results:
+                            match_result = results[0]
+                            match_score = match_result.get('MatchScore', 0)
+                            
+                            if match_score >= acceptance_threshold:
+                                bypass_segments.append(seg)
+                                final_translations[seg.id] = match_result.get('TargetSegment', seg.source)
+                                logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% memoQ TM match)")
+                                break
+                            elif match_score >= match_threshold:
+                                llm_segments.append(seg)
+                                tm_context[seg.id] = [match_result]
+                                break
+                    else:
+                        llm_segments.append(seg)
+                except Exception as e:
+                    logger.warning(f"memoQ TM lookup error for {seg.id}: {e}")
+                    llm_segments.append(seg)
             else:
                 llm_segments.append(seg)
             
@@ -622,6 +661,16 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 tb_matches = tb_matcher.extract_matches(seg.source)
                 if tb_matches:
                     tb_context[seg.id] = tb_matches
+            # Check memoQ TBs if available
+            elif memoq_client and memoq_tb_guids and seg in llm_segments:
+                try:
+                    for tb_guid in memoq_tb_guids:
+                        tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
+                        if tb_results:
+                            tb_context[seg.id] = tb_results
+                            break
+                except Exception as e:
+                    logger.warning(f"memoQ TB lookup error for {seg.id}: {e}")
             
             analysis_progress.progress((i + 1) / len(segments))
         
@@ -973,7 +1022,9 @@ with tab1:
                     xliff_file.getvalue(),
                     tmx_file.getvalue() if tmx_file else None,
                     csv_file.getvalue() if csv_file else None,
-                    custom_prompt_content=custom_prompt
+                    custom_prompt_content=custom_prompt,
+                    memoq_tm_guids=st.session_state.selected_tm_guids,
+                    memoq_tb_guids=st.session_state.selected_tb_guids
                 )
             else:
                 st.error("XLIFF file is required.")

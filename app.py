@@ -50,6 +50,28 @@ if 'reference_embeddings_ready' not in st.session_state:
 if 'dnt_terms' not in st.session_state:
     st.session_state.dnt_terms = []
 
+# memoQ Server state
+if 'memoq_server_url' not in st.session_state:
+    st.session_state.memoq_server_url = "https://mirage.memoq.com:8091/adaturkey"
+if 'memoq_username' not in st.session_state:
+    st.session_state.memoq_username = ""
+if 'memoq_password' not in st.session_state:
+    st.session_state.memoq_password = ""
+if 'memoq_verify_ssl' not in st.session_state:
+    st.session_state.memoq_verify_ssl = False
+if 'memoq_connected' not in st.session_state:
+    st.session_state.memoq_connected = False
+if 'memoq_client' not in st.session_state:
+    st.session_state.memoq_client = None
+if 'selected_tm_guids' not in st.session_state:
+    st.session_state.selected_tm_guids = []
+if 'selected_tb_guids' not in st.session_state:
+    st.session_state.selected_tb_guids = []
+if 'memoq_tms_list' not in st.session_state:
+    st.session_state.memoq_tms_list = []
+if 'memoq_tbs_list' not in st.session_state:
+    st.session_state.memoq_tbs_list = []
+
 # --- Sidebar ---
 with st.sidebar:
     st.title("⚙️ Configuration")
@@ -142,6 +164,68 @@ with st.sidebar:
             st.rerun()
     else:
         st.caption("No cached TMs")
+
+# ==================== memoQ SERVER CONNECTION ====================
+    st.divider()
+    st.subheader("🔗 memoQ Server")
+    
+    with st.form("memoq_connection_form"):
+        memoq_url = st.text_input(
+            "Server URL",
+            value=st.session_state.memoq_server_url,
+            help="memoQ Server base URL",
+            key="memoq_url_input"
+        )
+        
+        memoq_user = st.text_input(
+            "Username",
+            value=st.session_state.memoq_username,
+            key="memoq_user_input"
+        )
+        
+        memoq_pass = st.text_input(
+            "Password",
+            type="password",
+            value=st.session_state.memoq_password,
+            key="memoq_pass_input"
+        )
+        
+        memoq_ssl = st.checkbox(
+            "Verify SSL",
+            value=st.session_state.memoq_verify_ssl,
+            help="Disable for self-signed certificates"
+        )
+        
+        memoq_connect = st.form_submit_button("🔐 Connect", use_container_width=True)
+    
+    if memoq_connect:
+        st.session_state.memoq_server_url = memoq_url
+        st.session_state.memoq_username = memoq_user
+        st.session_state.memoq_password = memoq_pass
+        st.session_state.memoq_verify_ssl = memoq_ssl
+        
+        try:
+            client = MemoQServerClient(
+                server_url=memoq_url,
+                username=memoq_user,
+                password=memoq_pass,
+                verify_ssl=memoq_ssl
+            )
+            client.login()
+            st.session_state.memoq_client = client
+            st.session_state.memoq_connected = True
+            st.success("✓ Connected to memoQ Server")
+        except Exception as e:
+            st.error(f"Connection failed: {str(e)}")
+            st.session_state.memoq_connected = False
+            st.session_state.memoq_client = None
+    
+    if st.session_state.memoq_connected and st.session_state.memoq_client:
+        st.success("✓ Connected to memoQ Server")
+        if st.button("🔌 Disconnect", use_container_width=True):
+            st.session_state.memoq_connected = False
+            st.session_state.memoq_client = None
+            st.rerun()
     
     # Show if using generated prompt
     if st.session_state.use_generated_prompt and st.session_state.generated_prompt:

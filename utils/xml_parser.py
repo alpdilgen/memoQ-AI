@@ -45,11 +45,12 @@ class XMLParser:
             source_lang = file_elem.get('source-language')
             target_lang = file_elem.get('target-language')
             
-            # Normalize language codes (en-US -> en, de-DE -> de)
+            # Keep full language codes with variants (en-gb, en-us, etc)
+            # Convert to lowercase for consistency
             if source_lang:
-                source_lang = source_lang.split('-')[0].lower()
+                source_lang = source_lang.lower()
             if target_lang:
-                target_lang = target_lang.split('-')[0].lower()
+                target_lang = target_lang.lower()
             
             return source_lang, target_lang
             

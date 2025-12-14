@@ -195,6 +195,15 @@ class MemoQServerClient:
         ]
 
         payload = {"Segments": segment_objects}
+
+        # Some memoQ deployments require the language pair in the payload even when
+        # query parameters are present. Including them avoids 500 errors from the
+        # server when languages are mandatory for lookup.
+        if source_lang:
+            payload["SourceLangCode"] = source_lang
+        if target_lang:
+            payload["TargetLangCode"] = target_lang
+
         endpoint = f"/tms/{tm_guid}/lookupsegments"
 
         params = {}
@@ -258,9 +267,13 @@ class MemoQServerClient:
         """Lookup terms in Termbase"""
         payload = {"SearchTerms": search_terms}
 
+        # memoQ TB lookup may reject requests without language filters in the body.
+        # Duplicate the filters in both payload and query params for compatibility
+        # with different server versions.
         params = None
         if languages:
             params = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
+            payload["Languages"] = languages
 
         endpoint = f"/tbs/{tb_guid}/lookupterms"
 

@@ -188,31 +188,59 @@ class MemoQServerClient:
         source_lang: Optional[str] = None,
         target_lang: Optional[str] = None,
     ) -> Dict:
-        """Lookup segments in Translation Memory"""
+        """Lookup segments in Translation Memory.
+
+        Different memoQ server versions expect language codes either in the
+        payload, in the query string, or both. To maximize compatibility we try
+        multiple combinations and return as soon as one succeeds.
+        """
         segment_objects = [
             {"Segment": seg}
             for seg in segments
         ]
 
-        payload = {"Segments": segment_objects}
-
-        # Some memoQ deployments require the language pair in the payload even when
-        # query parameters are present. Including them avoids 500 errors from the
-        # server when languages are mandatory for lookup.
-        if source_lang:
-            payload["SourceLangCode"] = source_lang
-        if target_lang:
-            payload["TargetLangCode"] = target_lang
-
         endpoint = f"/tms/{tm_guid}/lookupsegments"
 
-        params = {}
+        base_payload = {"Segments": segment_objects}
+        payload_with_langs = dict(base_payload)
         if source_lang:
-            params["srcLang"] = source_lang
+            payload_with_langs["SourceLangCode"] = source_lang
         if target_lang:
-            params["targetLang"] = target_lang
+            payload_with_langs["TargetLangCode"] = target_lang
 
-        return self._make_request("POST", endpoint, data=payload, params=params or None)
+        params_with_langs = {}
+        if source_lang:
+            params_with_langs["srcLang"] = source_lang
+        if target_lang:
+            params_with_langs["targetLang"] = target_lang
+
+        attempts: List[Tuple[Dict, Dict]] = []
+
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs or None, base_payload))
+        attempts.append((None, payload_with_langs))
+
+        last_error: Optional[Exception] = None
+
+        for attempt_params, attempt_payload in attempts:
+            try:
+                return self._make_request(
+                    "POST",
+                    endpoint,
+                    data=attempt_payload,
+                    params=attempt_params,
+                )
+            except Exception as exc:  # pragma: no cover - network errors
+                last_error = exc
+                logger.warning(
+                    "memoQ TM lookup failed with params=%s payload_keys=%s: %s",
+                    attempt_params,
+                    list(attempt_payload.keys()),
+                    exc,
+                )
+
+        raise last_error if last_error else Exception("TM lookup failed")
     
     def concordance_search(
         self,
@@ -264,17 +292,40 @@ class MemoQServerClient:
         search_terms: List[str],
         languages: Optional[List[str]] = None
     ) -> Dict:
-        """Lookup terms in Termbase"""
-        payload = {"SearchTerms": search_terms}
+        """Lookup terms in Termbase with compatibility fallbacks."""
+        base_payload = {"SearchTerms": search_terms}
+        payload_with_langs = dict(base_payload)
 
-        # memoQ TB lookup may reject requests without language filters in the body.
-        # Duplicate the filters in both payload and query params for compatibility
-        # with different server versions.
-        params = None
+        params_with_langs = None
         if languages:
-            params = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
-            payload["Languages"] = languages
+            params_with_langs = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
+            payload_with_langs["Languages"] = languages
 
         endpoint = f"/tbs/{tb_guid}/lookupterms"
 
-        return self._make_request("POST", endpoint, data=payload, params=params)
+        attempts: List[Tuple[Optional[Dict], Dict]] = []
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs, base_payload))
+        attempts.append((None, payload_with_langs))
+
+        last_error: Optional[Exception] = None
+
+        for attempt_params, attempt_payload in attempts:
+            try:
+                return self._make_request(
+                    "POST",
+                    endpoint,
+                    data=attempt_payload,
+                    params=attempt_params,
+                )
+            except Exception as exc:  # pragma: no cover - network errors
+                last_error = exc
+                logger.warning(
+                    "memoQ TB lookup failed with params=%s payload_keys=%s: %s",
+                    attempt_params,
+                    list(attempt_payload.keys()),
+                    exc,
+                )
+
+        raise last_error if last_error else Exception("TB lookup failed")

@@ -587,7 +587,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     logger.info(f"memoQ Server: {len(memoq_tm_guids)} TMs, {len(memoq_tb_guids)} TBs")
             except Exception as e:
                 st.warning(f"Could not connect to memoQ Server: {str(e)}")
-                logger.warning(f"memoQ connection error: {e}")
+                logger.info(f"memoQ connection error: {e}")
         
         # 4. Initialize Prompt Builder
         # Priority: Generated prompt > Custom file > Default
@@ -652,7 +652,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     else:
                         llm_segments.append(seg)
                 except Exception as e:
-                    logger.warning(f"memoQ TM lookup error for {seg.id}: {e}")
+                    logger.info(f"memoQ TM lookup error for {seg.id}: {e}")
                     llm_segments.append(seg)
             else:
                 llm_segments.append(seg)
@@ -670,7 +670,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                             tb_context[seg.id] = tb_results
                             break
                 except Exception as e:
-                    logger.warning(f"memoQ TB lookup error for {seg.id}: {e}")
+                    logger.info(f"memoQ TB lookup error for {seg.id}: {e}")
             
             analysis_progress.progress((i + 1) / len(segments))
         

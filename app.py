@@ -827,6 +827,30 @@ with tab1:
             help="MemoQ exported or simple 2-column CSV"
         )
         
+        # ==================== memoQ SERVER RESOURCES ====================
+        if st.session_state.memoq_connected and st.session_state.memoq_client:
+            st.markdown("---")
+            st.markdown("##### 🔗 memoQ Server Resources")
+            
+            # Load TM/TB data
+            selected_tms, selected_tbs = MemoQUI.show_memoq_data_loader(
+                client=st.session_state.memoq_client,
+                src_lang=src_code,
+                tgt_lang=tgt_code
+            )
+            
+            # Store selections
+            st.session_state.selected_tm_guids = selected_tms
+            st.session_state.selected_tb_guids = selected_tbs
+            
+            # Show status
+            if selected_tms or selected_tbs:
+                st.info(
+                    f"✓ Using {len(selected_tms)} TM(s) and {len(selected_tbs)} TB(s) from memoQ Server"
+                )
+            
+            st.markdown("---")
+        
         # Reference file for style/tone with semantic matching
         st.markdown("---")
         st.markdown("##### 📑 Semantic Reference (Optional)")

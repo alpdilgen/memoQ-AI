@@ -36,12 +36,22 @@ class MemoQServerClient:
             verify_ssl: SSL certificate verification
             timeout: Request timeout
         """
-        self.server_url = server_url.rstrip('/')
+        # Allow users to paste either the tenant root (recommended) or a URL
+        # that already includes the memoQ REST base path. We normalize here to
+        # avoid double-including "/memoqserverhttpapi/v1" which would break
+        # authentication (e.g., .../memoqserverhttpapi/v1/memoqserverhttpapi/v1/auth/login).
+        self.base_path = "/memoqserverhttpapi/v1"
+        normalized_url = server_url.rstrip('/')
+        for suffix in (self.base_path, "/memoqserverhttpapi"):
+            if normalized_url.endswith(suffix):
+                normalized_url = normalized_url[: -len(suffix)].rstrip('/')
+                break
+
+        self.server_url = normalized_url
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
         self.timeout = timeout
-        self.base_path = "/memoqserverhttpapi/v1"
         
         self.token = None
         self.token_expiry = None
@@ -58,8 +68,9 @@ class MemoQServerClient:
             "Password": self.password,
             "LoginMode": 0
         }
-        
+
         try:
+            logger.info("memoQ login endpoint: %s", url)
             response = requests.post(
                 url,
                 json=payload,
@@ -138,13 +149,17 @@ class MemoQServerClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
+            # Try to bubble up memoQ error payloads for easier debugging
             try:
                 error_data = response.json()
                 error_code = error_data.get("ErrorCode", "Unknown")
                 error_msg = error_data.get("Message", "")
                 raise Exception(f"{error_code}: {error_msg}")
-            except:
-                raise Exception(f"HTTP {response.status_code}: {str(e)}")
+            except Exception:
+                # If response is not JSON, include text for context
+                raise Exception(
+                    f"HTTP {response.status_code}: {str(e)} | Response: {response.text}"
+                )
         
         except Exception as e:
             raise Exception(f"Request failed: {str(e)}")
@@ -180,18 +195,63 @@ class MemoQServerClient:
     def lookup_segments(
         self,
         tm_guid: str,
-        segments: List[str]
+        segments: List[str],
+        source_lang: Optional[str] = None,
+        target_lang: Optional[str] = None,
     ) -> Dict:
-        """Lookup segments in Translation Memory"""
+        """Lookup segments in Translation Memory.
+
+        Different memoQ server versions expect language codes either in the
+        payload, in the query string, or both. To maximize compatibility we try
+        multiple combinations and return as soon as one succeeds.
+        """
         segment_objects = [
             {"Segment": seg}
             for seg in segments
         ]
-        
-        payload = {"Segments": segment_objects}
+
         endpoint = f"/tms/{tm_guid}/lookupsegments"
-        
-        return self._make_request("POST", endpoint, data=payload)
+
+        base_payload = {"Segments": segment_objects}
+        payload_with_langs = dict(base_payload)
+        if source_lang:
+            payload_with_langs["SourceLangCode"] = source_lang
+        if target_lang:
+            payload_with_langs["TargetLangCode"] = target_lang
+
+        params_with_langs = {}
+        if source_lang:
+            params_with_langs["srcLang"] = source_lang
+        if target_lang:
+            params_with_langs["targetLang"] = target_lang
+
+        attempts: List[Tuple[Dict, Dict]] = []
+
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs or None, base_payload))
+        attempts.append((None, payload_with_langs))
+
+        last_error: Optional[Exception] = None
+
+        for attempt_params, attempt_payload in attempts:
+            try:
+                return self._make_request(
+                    "POST",
+                    endpoint,
+                    data=attempt_payload,
+                    params=attempt_params,
+                )
+            except Exception as exc:  # pragma: no cover - network errors
+                last_error = exc
+                logger.warning(
+                    "memoQ TM lookup failed with params=%s payload_keys=%s: %s",
+                    attempt_params,
+                    list(attempt_payload.keys()),
+                    exc,
+                )
+
+        raise last_error if last_error else Exception("TM lookup failed")
     
     def concordance_search(
         self,
@@ -240,10 +300,43 @@ class MemoQServerClient:
     def lookup_terms(
         self,
         tb_guid: str,
-        search_terms: List[str]
+        search_terms: List[str],
+        languages: Optional[List[str]] = None
     ) -> Dict:
-        """Lookup terms in Termbase"""
-        payload = {"SearchTerms": search_terms}
+        """Lookup terms in Termbase with compatibility fallbacks."""
+        base_payload = {"SearchTerms": search_terms}
+        payload_with_langs = dict(base_payload)
+
+        params_with_langs = None
+        if languages:
+            params_with_langs = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
+            payload_with_langs["Languages"] = languages
+
         endpoint = f"/tbs/{tb_guid}/lookupterms"
-        
-        return self._make_request("POST", endpoint, data=payload)
+
+        attempts: List[Tuple[Optional[Dict], Dict]] = []
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs, base_payload))
+        attempts.append((None, payload_with_langs))
+
+        last_error: Optional[Exception] = None
+
+        for attempt_params, attempt_payload in attempts:
+            try:
+                return self._make_request(
+                    "POST",
+                    endpoint,
+                    data=attempt_payload,
+                    params=attempt_params,
+                )
+            except Exception as exc:  # pragma: no cover - network errors
+                last_error = exc
+                logger.warning(
+                    "memoQ TB lookup failed with params=%s payload_keys=%s: %s",
+                    attempt_params,
+                    list(attempt_payload.keys()),
+                    exc,
+                )
+
+        raise last_error if last_error else Exception("TB lookup failed")

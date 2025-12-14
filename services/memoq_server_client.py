@@ -182,39 +182,16 @@ class MemoQServerClient:
         tm_guid: str,
         segments: List[str]
     ) -> Dict:
-        """Lookup segments in Translation Memory - with custom payload handling"""
-        if not self._ensure_token():
-            raise Exception("Authentication failed")
+        """Lookup segments in Translation Memory"""
+        segment_objects = [
+            {"Segment": seg}
+            for seg in segments
+        ]
         
-        # Construct URL
-        url = f"{self.server_url}{self.base_path}/tms/{tm_guid}/lookupsegments"
+        payload = {"Segments": segment_objects}
+        endpoint = f"/tms/{tm_guid}/lookupsegments"
         
-        # Prepare payload as a list (not wrapped in dict)
-        payload = [{"Segment": seg} for seg in segments]
-        
-        # Prepare request
-        request_params = {"authToken": self.token}
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
-        try:
-            import json
-            # Send as JSON string with list
-            response = requests.post(
-                url,
-                data=json.dumps(payload),  # Use data= with json.dumps instead of json=
-                params=request_params,
-                headers=headers,
-                verify=self.verify_ssl,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"lookup_segments failed: {str(e)}")
-            raise
+        return self._make_request("POST", endpoint, data=payload)
     
     def concordance_search(
         self,

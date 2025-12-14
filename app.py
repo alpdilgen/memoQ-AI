@@ -691,8 +691,25 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             elif memoq_client and memoq_tm_guids:
                 try:
                     for tm_guid in memoq_tm_guids:
-                        results = memoq_client.lookup_segments(tm_guid, [seg.source])
-                        logger.info(f"memoQ lookup for {seg.id}: {results}")
+                        results = None
+                        retry_count = 0
+                        max_retries = 2
+                        
+                        # Retry logic for HTTP 500 errors
+                        while results is None and retry_count < max_retries:
+                            try:
+                                results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                                if results:
+                                    break
+                            except Exception as retry_err:
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    import time
+                                    time.sleep(1)  # Wait 1 second before retry
+                                    logger.info(f"[{seg.id}] Retry {retry_count}/{max_retries-1} after error: {str(retry_err)}")
+                                else:
+                                    logger.info(f"[{seg.id}] memoQ lookup failed after {max_retries} attempts: {str(retry_err)}")
+                                    results = None
                         
                         if results and isinstance(results, dict):
                             # Parse memoQ response structure
@@ -720,18 +737,18 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     if match_score >= acceptance_threshold:
                                         bypass_segments.append(seg)
                                         final_translations[seg.id] = target_text
-                                        match_rates[seg.id] = int(match_score)  # NEW: Store match rate
+                                        match_rates[seg.id] = int(match_score)  # Store match rate
                                         logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
                                         break
                                     elif match_score >= match_threshold:
                                         llm_segments.append(seg)
-                                        match_rates[seg.id] = 0  # NEW: Will use LLM
+                                        match_rates[seg.id] = 0  # Will use LLM
                                         tm_context[seg.id] = [{'MatchRate': match_score, 'TargetSegment': target_text}]
                                         logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
                                         break
                                 else:
                                     llm_segments.append(seg)
-                                    match_rates[seg.id] = 0  # NEW: No match found
+                                    match_rates[seg.id] = 0  # No match found
                             else:
                                 llm_segments.append(seg)
                         else:
@@ -739,6 +756,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 except Exception as e:
                     logger.info(f"memoQ TM lookup error for {seg.id}: {str(e)}")
                     llm_segments.append(seg)
+                    match_rates[seg.id] = 0
             else:
                 llm_segments.append(seg)
             

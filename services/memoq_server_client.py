@@ -180,17 +180,27 @@ class MemoQServerClient:
     def lookup_segments(
         self,
         tm_guid: str,
-        segments: List[str]
+        segments: List[str],
+        source_lang: Optional[str] = None,
+        target_lang: Optional[str] = None
     ) -> Dict:
         """Lookup segments in Translation Memory"""
-        segment_objects = [
-            {"Segment": seg}
-            for seg in segments
-        ]
-        
+        segment_objects = []
+
+        for seg in segments:
+            seg_obj = {"Segment": seg}
+
+            # Explicitly provide language codes to avoid server-side errors
+            if source_lang:
+                seg_obj["SourceLangCode"] = source_lang
+            if target_lang:
+                seg_obj["TargetLangCode"] = target_lang
+
+            segment_objects.append(seg_obj)
+
         payload = {"Segments": segment_objects}
         endpoint = f"/tms/{tm_guid}/lookupsegments"
-        
+
         return self._make_request("POST", endpoint, data=payload)
     
     def concordance_search(
@@ -240,10 +250,16 @@ class MemoQServerClient:
     def lookup_terms(
         self,
         tb_guid: str,
-        search_terms: List[str]
+        search_terms: List[str],
+        languages: Optional[List[str]] = None
     ) -> Dict:
         """Lookup terms in Termbase"""
         payload = {"SearchTerms": search_terms}
+
+        # Provide languages to satisfy memoQ lookup requirements
+        if languages:
+            payload["Languages"] = languages
+
         endpoint = f"/tbs/{tb_guid}/lookupterms"
-        
+
         return self._make_request("POST", endpoint, data=payload)

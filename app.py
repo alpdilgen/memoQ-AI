@@ -698,7 +698,12 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                         # Retry logic for HTTP 500 errors
                         while results is None and retry_count < max_retries:
                             try:
-                                results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                                results = memoq_client.lookup_segments(
+                                    tm_guid,
+                                    [seg.source],
+                                    source_lang=src_code,
+                                    target_lang=tgt_code
+                                )
                                 if results:
                                     break
                             except Exception as retry_err:
@@ -768,7 +773,11 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             elif memoq_client and memoq_tb_guids and seg in llm_segments:
                 try:
                     for tb_guid in memoq_tb_guids:
-                        tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
+                        tb_results = memoq_client.lookup_terms(
+                            tb_guid,
+                            [seg.source],
+                            languages=[src_code, tgt_code]
+                        )
                         if tb_results:
                             tb_context[seg.id] = tb_results
                             break

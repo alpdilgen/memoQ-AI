@@ -165,6 +165,13 @@ class MemoQServerClient:
                     f"HTTP {response.status_code}: {str(e)} | Response: {response_text}"
                 )
 
+                raise Exception(f"{error_code}: {error_msg}")
+            except Exception:
+                # If response is not JSON, include text for context
+                raise Exception(
+                    f"HTTP {response.status_code}: {str(e)} | Response: {response.text}"
+                )
+        
         except Exception as e:
             raise Exception(f"Request failed: {str(e)}")
     
@@ -211,31 +218,37 @@ class MemoQServerClient:
         """
         segment_objects = []
         for seg in segments:
-            # memoQ TM lookup expects <seg>-wrapped content in "Segment"
-            segment_objects.append({"Segment": f"<seg>{seg}</seg>"})
+            # Include both plain text and memoQ-styled <seg> XML for maximum compatibility
+            segment_objects.append({
+                "Segment": seg,
+                "SourceSegment": f"<seg>{seg}</seg>",
+            })
+        segment_objects = [
+            {"Segment": seg}
+            for seg in segments
+        ]
 
         endpoint = f"/tms/{tm_guid}/lookupsegments"
 
         base_payload = {"Segments": segment_objects}
-
         payload_with_langs = dict(base_payload)
-        params_with_langs = {}
-
         if source_lang:
-            params_with_langs["srcLang"] = source_lang
             payload_with_langs["SourceLangCode"] = source_lang
         if target_lang:
-            params_with_langs["targetLang"] = target_lang
             payload_with_langs["TargetLangCode"] = target_lang
 
-        # Try the official payload first (no extra fields), then fall back to
-        # adding language data to the query string and payload.
-        attempts: List[Tuple[Optional[Dict], Dict]] = [
-            (None, base_payload),
-            (params_with_langs or None, base_payload),
-            (params_with_langs or None, payload_with_langs),
-            (None, payload_with_langs),
-        ]
+        params_with_langs = {}
+        if source_lang:
+            params_with_langs["srcLang"] = source_lang
+        if target_lang:
+            params_with_langs["targetLang"] = target_lang
+
+        attempts: List[Tuple[Dict, Dict]] = []
+
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs or None, base_payload))
+        attempts.append((None, payload_with_langs))
 
         last_error: Optional[Exception] = None
 
@@ -317,12 +330,8 @@ class MemoQServerClient:
         languages: Optional[List[str]] = None
     ) -> Dict:
         """Lookup terms in Termbase with compatibility fallbacks."""
-        # Align with memoQ TB lookup expectations: "SearchExpression" is the
-        # documented field name, but we keep backward-compatible variants.
-        official_payload = {"SearchExpression": search_terms}
-        alt_payload = {"SearchTerms": search_terms}
-
-        payload_with_langs = dict(official_payload)
+        base_payload = {"SearchTerms": search_terms}
+        payload_with_langs = dict(base_payload)
 
         params_with_langs = None
         if languages:
@@ -331,14 +340,11 @@ class MemoQServerClient:
 
         endpoint = f"/tbs/{tb_guid}/lookupterms"
 
-        attempts: List[Tuple[Optional[Dict], Dict]] = [
-            (None, official_payload),
-            (params_with_langs, official_payload),
-            (params_with_langs, payload_with_langs),
-            (None, payload_with_langs),
-            (params_with_langs, alt_payload),
-            (None, alt_payload),
-        ]
+        attempts: List[Tuple[Optional[Dict], Dict]] = []
+        if params_with_langs:
+            attempts.append((params_with_langs, payload_with_langs))
+        attempts.append((params_with_langs, base_payload))
+        attempts.append((None, payload_with_langs))
 
         last_error: Optional[Exception] = None
 

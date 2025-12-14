@@ -871,8 +871,8 @@ with tab1:
             help="MemoQ exported or simple 2-column CSV"
         )
         
-        # ==================== memoQ SERVER RESOURCES ====================
-        if st.session_state.memoq_connected and st.session_state.memoq_client:
+        # ==================== memoQ SERVER RESOURCES (if no local TM/TB uploaded) ====================
+        if not tmx_file and not csv_file and st.session_state.memoq_connected and st.session_state.memoq_client:
             st.markdown("---")
             st.markdown("##### 🔗 memoQ Server Resources")
             
@@ -893,6 +893,14 @@ with tab1:
                     f"✓ Using {len(selected_tms)} TM(s) and {len(selected_tbs)} TB(s) from memoQ Server"
                 )
             
+            st.markdown("---")
+        elif tmx_file or csv_file:
+            # Traditional workflow - show message that local files are being used
+            st.markdown("---")
+            if tmx_file:
+                st.success("✓ Using uploaded TMX file as Translation Memory")
+            if csv_file:
+                st.success("✓ Using uploaded CSV file as Termbase")
             st.markdown("---")
         
         # Reference file for style/tone with semantic matching
@@ -1023,8 +1031,8 @@ with tab1:
                     tmx_file.getvalue() if tmx_file else None,
                     csv_file.getvalue() if csv_file else None,
                     custom_prompt_content=custom_prompt,
-                    memoq_tm_guids=st.session_state.selected_tm_guids,
-                    memoq_tb_guids=st.session_state.selected_tb_guids
+                    memoq_tm_guids=st.session_state.selected_tm_guids if not tmx_file else [],
+                    memoq_tb_guids=st.session_state.selected_tb_guids if not csv_file else []
                 )
             else:
                 st.error("XLIFF file is required.")

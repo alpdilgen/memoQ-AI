@@ -183,8 +183,6 @@ class MemoQServerClient:
         segments: List[str]
     ) -> Dict:
         """Lookup segments in Translation Memory"""
-        # No special encoding needed for JSON - requests library handles it correctly
-        
         segment_objects = [
             {"Segment": seg}
             for seg in segments

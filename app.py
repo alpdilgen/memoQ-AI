@@ -82,6 +82,57 @@ with st.sidebar:
     detected_src = st.session_state.detected_languages.get('source')
     detected_tgt = st.session_state.detected_languages.get('target')
     
+    # Convert detected ISO codes (en-gb) to memoQ codes (eng-GB)
+    if detected_src:
+        parts = detected_src.split('-')
+        if len(parts) == 2:
+            # en-gb -> eng-GB
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            base = base_lang_map.get(parts[0], parts[0])
+            detected_src = f"{base}-{parts[1].upper()}"
+        else:
+            # Single code like 'en' -> 'eng'
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            detected_src = base_lang_map.get(detected_src, detected_src)
+    
+    if detected_tgt:
+        parts = detected_tgt.split('-')
+        if len(parts) == 2:
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            base = base_lang_map.get(parts[0], parts[0])
+            detected_tgt = f"{base}-{parts[1].upper()}"
+        else:
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            detected_tgt = base_lang_map.get(detected_tgt, detected_tgt)
+    
     lang_keys = list(config.SUPPORTED_LANGUAGES.keys())
     
     src_default = lang_keys.index(detected_src) if detected_src in lang_keys else lang_keys.index('eng')

@@ -144,16 +144,26 @@ class MemoQServerClient:
                 )
             else:
                 raise ValueError(f"Unsupported method: {method}")
-            
+
             response.raise_for_status()
             return response.json()
-            
+
         except requests.exceptions.HTTPError as e:
             # Try to bubble up memoQ error payloads for easier debugging
+            response_text = response.text if 'response' in locals() else ''
             try:
                 error_data = response.json()
                 error_code = error_data.get("ErrorCode", "Unknown")
                 error_msg = error_data.get("Message", "")
+                raise Exception(
+                    f"HTTP {response.status_code}: {error_code}: {error_msg} | Body: {response_text}"
+                )
+            except Exception:
+                # If response is not JSON, include text for context
+                raise Exception(
+                    f"HTTP {response.status_code}: {str(e)} | Response: {response_text}"
+                )
+
                 raise Exception(f"{error_code}: {error_msg}")
             except Exception:
                 # If response is not JSON, include text for context
@@ -205,6 +215,13 @@ class MemoQServerClient:
         payload, in the query string, or both. To maximize compatibility we try
         multiple combinations and return as soon as one succeeds.
         """
+        segment_objects = []
+        for seg in segments:
+            # Include both plain text and memoQ-styled <seg> XML for maximum compatibility
+            segment_objects.append({
+                "Segment": seg,
+                "SourceSegment": f"<seg>{seg}</seg>",
+            })
         segment_objects = [
             {"Segment": seg}
             for seg in segments
@@ -233,6 +250,14 @@ class MemoQServerClient:
         attempts.append((None, payload_with_langs))
 
         last_error: Optional[Exception] = None
+
+        logger.info(
+            "memoQ TM lookup: tm_guid=%s segments=%s params=%s payload_keys=%s",
+            tm_guid,
+            len(segments),
+            params_with_langs,
+            list(payload_with_langs.keys()),
+        )
 
         for attempt_params, attempt_payload in attempts:
             try:

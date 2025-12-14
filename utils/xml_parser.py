@@ -167,11 +167,22 @@ class XMLParser:
             return []
 
     @staticmethod
-    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment]) -> bytes:
+    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment], match_rates: Dict[str, int] = None, username: str = "AnovaAI") -> bytes:
         """
-        Updates XLIFF with proper tag reconstruction.
-        Requires segments_map to access the tag_map for reconstruction.
+        Updates XLIFF with proper tag reconstruction and memoQ commit metadata.
+        
+        Args:
+            original_content: Original XLIFF bytes
+            translations: Dict of segment_id -> translated_text
+            segments_map: Dict of segment_id -> TranslationSegment
+            match_rates: Dict of segment_id -> match_rate percentage (0-100)
+            username: Username for translator commit
         """
+        from datetime import datetime
+        
+        if match_rates is None:
+            match_rates = {}
+        
         ET.register_namespace('', "urn:oasis:names:tc:xliff:document:1.2")
         ET.register_namespace('mq', "MQXliff")
         
@@ -179,6 +190,9 @@ class XMLParser:
         root = tree.getroot()
         
         ns = {'x': 'urn:oasis:names:tc:xliff:document:1.2', 'mq': 'MQXliff'}
+        
+        # Get current timestamp in ISO format
+        current_timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
         
         for trans_unit in root.findall(".//x:trans-unit", ns):
             seg_id = trans_unit.get('id')
@@ -207,6 +221,14 @@ class XMLParser:
                 for key in list(trans_unit.attrib.keys()):
                     if "status" in key:
                         trans_unit.attrib[key] = "Translated"
+                
+                # Add memoQ commit metadata
+                match_rate = match_rates.get(seg_id, 0)
+                trans_unit.attrib['{MQXliff}translatorcommitmatchrate'] = str(int(match_rate))
+                trans_unit.attrib['{MQXliff}translatorcommitusername'] = username
+                trans_unit.attrib['{MQXliff}translatorcommittimestamp'] = current_timestamp
+                trans_unit.attrib['{MQXliff}lastchangedtimestamp'] = current_timestamp
+                trans_unit.attrib['{MQXliff}lastchanginguser'] = username
 
         # Final string generation and repair
         output_str = ET.tostring(root, encoding='unicode')

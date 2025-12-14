@@ -184,7 +184,7 @@ class MemoQServerClient:
     ) -> Dict:
         """Lookup segments in Translation Memory"""
         segment_objects = [
-            {"Segment": f"<seg>{seg}</seg>"}
+            {"Segment": seg}
             for seg in segments
         ]
         

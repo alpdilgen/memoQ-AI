@@ -28,7 +28,7 @@ class MemoQUI:
             
             # Initialize session state for memoQ settings
             if 'memoq_server_url' not in st.session_state:
-                st.session_state.memoq_server_url = "https://mirage.memoq.com:8091/adaturkey"
+                st.session_state.memoq_server_url = "https://mirage.memoq.com:9091/adaturkey"
             if 'memoq_username' not in st.session_state:
                 st.session_state.memoq_username = "promotloc"
             if 'memoq_password' not in st.session_state:
@@ -280,50 +280,16 @@ class MemoQUI:
     @staticmethod
     def _get_memoq_lang_code(lang_code: str) -> str:
         """
-        Convert language code to memoQ format
+        Language codes are already in memoQ format (3-letter + optional variant)
         
         Args:
-            lang_code: ISO language code (e.g., 'en', 'tr')
+            lang_code: memoQ language code (e.g., 'eng', 'eng-GB', 'tur')
         
         Returns:
-            memoQ language code (e.g., 'eng', 'tur')
+            Same code (already in correct format)
         """
-        # Map common language codes to memoQ 3-letter codes
-        lang_map = {
-            'en': 'eng',
-            'tr': 'tur',
-            'hu': 'hun',
-            'de': 'ger',
-            'fr': 'fra',
-            'es': 'spa',
-            'it': 'ita',
-            'pt': 'por',
-            'pl': 'pol',
-            'ru': 'rus',
-            'ja': 'jpn',
-            'zh': 'zho',
-            'ar': 'ara',
-            'ko': 'kor',
-            'nl': 'nld',
-            'sv': 'swe',
-            'no': 'nor',
-            'da': 'dan',
-            'fi': 'fin',
-            'el': 'ell',
-            'he': 'heb',
-            'th': 'tha',
-            'vi': 'vie',
-            'bg': 'bul',
-            'ro': 'ron',
-            'cs': 'ces',
-            'sk': 'slk',
-            'uk': 'ukr',
-            'et': 'est',
-            'lv': 'lav',
-            'lt': 'lit',
-        }
-        
-        return lang_map.get(lang_code, lang_code)
+        # Codes are already memoQ 3-letter codes from config
+        return lang_code
     
     @staticmethod
     def show_tm_lookup_results(

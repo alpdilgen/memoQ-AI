@@ -296,7 +296,9 @@ class MemoQUI:
         client: MemoQServerClient,
         tm_guids: List[str],
         source_text: str,
-        min_match_rate: int = 75
+        min_match_rate: int = 75,
+        source_lang: Optional[str] = None,
+        target_lang: Optional[str] = None,
     ) -> Optional[Dict]:
         """
         Show TM lookup results
@@ -319,7 +321,12 @@ class MemoQUI:
         with st.spinner("🔍 Searching Translation Memories..."):
             for tm_guid in tm_guids:
                 try:
-                    results = client.lookup_segments(tm_guid, [source_text])
+                    results = client.lookup_segments(
+                        tm_guid,
+                        [source_text],
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                    )
                     hits = results.get("Result", [{}])[0].get("TMHits", [])
                     
                     for hit in hits:

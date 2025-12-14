@@ -167,22 +167,11 @@ class XMLParser:
             return []
 
     @staticmethod
-    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment], match_rates: Dict[str, int] = None, username: str = "AnovaAI") -> bytes:
+    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment]) -> bytes:
         """
-        Updates XLIFF with proper tag reconstruction and memoQ commit metadata.
-        
-        Args:
-            original_content: Original XLIFF bytes
-            translations: Dict of segment_id -> translated_text
-            segments_map: Dict of segment_id -> TranslationSegment
-            match_rates: Dict of segment_id -> match_rate percentage (0-100)
-            username: Username for translator commit
+        Updates XLIFF with proper tag reconstruction.
+        Requires segments_map to access the tag_map for reconstruction.
         """
-        from datetime import datetime
-        
-        if match_rates is None:
-            match_rates = {}
-        
         ET.register_namespace('', "urn:oasis:names:tc:xliff:document:1.2")
         ET.register_namespace('mq', "MQXliff")
         
@@ -191,17 +180,10 @@ class XMLParser:
         
         ns = {'x': 'urn:oasis:names:tc:xliff:document:1.2', 'mq': 'MQXliff'}
         
-        # Get current timestamp in ISO format
-        current_timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-        
         for trans_unit in root.findall(".//x:trans-unit", ns):
             seg_id = trans_unit.get('id')
             
             if seg_id in translations:
-                # Get source text for match reference
-                source_node = trans_unit.find("x:source", ns)
-                source_text = "".join(source_node.itertext()) if source_node is not None else ""
-                
                 target = trans_unit.find("x:target", ns)
                 if target is None:
                     target = ET.SubElement(trans_unit, "{urn:oasis:names:tc:xliff:document:1.2}target")
@@ -221,50 +203,10 @@ class XMLParser:
                     # Fallback if no tags mapped
                     target.text = trans_text
                 
-                # Update status to "Translated"
-                trans_unit.attrib['{MQXliff}status'] = "Translated"
-                
-                # Get match rate (100 for TM, 0 for LLM)
-                match_rate = match_rates.get(seg_id, 0)
-                trans_unit.attrib['{MQXliff}percent'] = str(int(match_rate))
-                
-                # Add/update memoQ commitinfos element
-                commit_infos = trans_unit.find("mq:commitinfos", ns)
-                if commit_infos is None:
-                    commit_infos = ET.SubElement(trans_unit, "{MQXliff}commitinfos")
-                else:
-                    # Clear existing commit infos
-                    for child in list(commit_infos):
-                        commit_infos.remove(child)
-                
-                # Add commit info element
-                commit_info = ET.SubElement(commit_infos, "commitinfo")
-                commit_info.attrib['matchrate'] = str(int(match_rate))
-                commit_info.attrib['role'] = "1000"
-                commit_info.attrib['timestamp'] = current_timestamp
-                commit_info.attrib['username'] = username
-                commit_info.attrib['editingtime'] = "0"
-                
-                # Add inserted match element if it's a TM match (match_rate > 0)
-                if match_rate > 0:
-                    inserted_match = ET.SubElement(trans_unit, "{MQXliff}insertedmatch")
-                    inserted_match.attrib['matchtype'] = "0"
-                    inserted_match.attrib['source'] = "AnovaAI memoQ Integration"
-                    inserted_match.attrib['matchrate'] = str(int(match_rate))
-                    inserted_match.attrib['originalmatchrate'] = str(int(match_rate))
-                    inserted_match.attrib['ambiguousexact'] = "false"
-                    inserted_match.attrib['setsegmentswhensplittingintorows'] = "false"
-                    inserted_match.attrib['hitfororiginalsegementversion'] = "false"
-                    
-                    # Add source element
-                    src_elem = ET.SubElement(inserted_match, "{urn:oasis:names:tc:xliff:document:1.2}source")
-                    src_elem.attrib['{http://www.w3.org/XML/1998/namespace}space'] = "preserve"
-                    src_elem.text = source_text
-                    
-                    # Add target element
-                    tgt_elem = ET.SubElement(inserted_match, "{urn:oasis:names:tc:xliff:document:1.2}target")
-                    tgt_elem.attrib['{http://www.w3.org/XML/1998/namespace}space'] = "preserve"
-                    tgt_elem.text = trans_text
+                # Update status
+                for key in list(trans_unit.attrib.keys()):
+                    if "status" in key:
+                        trans_unit.attrib[key] = "Translated"
 
         # Final string generation and repair
         output_str = ET.tostring(root, encoding='unicode')

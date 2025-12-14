@@ -183,12 +183,8 @@ class MemoQServerClient:
         segments: List[str]
     ) -> Dict:
         """Lookup segments in Translation Memory"""
-        segment_objects = [
-            {"Segment": seg}
-            for seg in segments
-        ]
-        
-        payload = {"Segments": segment_objects}
+        # Send segments as a direct list of objects, not wrapped in "Segments" key
+        payload = [{"Segment": seg} for seg in segments]
         endpoint = f"/tms/{tm_guid}/lookupsegments"
         
         return self._make_request("POST", endpoint, data=payload)

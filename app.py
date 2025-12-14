@@ -20,6 +20,8 @@ st.set_page_config(page_title=config.APP_NAME, layout="wide", page_icon="🌍")
 # Session state initialization
 if 'translation_results' not in st.session_state:
     st.session_state.translation_results = {}
+if 'match_rates' not in st.session_state:  # NEW: Initialize match_rates
+    st.session_state.match_rates = {}
 if 'segment_objects' not in st.session_state:
     st.session_state.segment_objects = {}
 if 'translation_log' not in st.session_state:
@@ -660,6 +662,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         bypass_segments = []
         llm_segments = []
         final_translations = {}
+        match_rates = {}  # NEW: Track match rates for each segment
         tm_context = {}
         tb_context = {}
         
@@ -676,9 +679,11 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 if should_bypass and tm_translation:
                     bypass_segments.append(seg)
                     final_translations[seg.id] = apply_tm_to_segment(seg.source, tm_translation)
+                    match_rates[seg.id] = int(match_score)  # NEW: Store match rate
                     logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% TM match)")
                 else:
                     llm_segments.append(seg)
+                    match_rates[seg.id] = 0  # NEW: 0 for LLM segments
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
@@ -715,15 +720,18 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     if match_score >= acceptance_threshold:
                                         bypass_segments.append(seg)
                                         final_translations[seg.id] = target_text
+                                        match_rates[seg.id] = int(match_score)  # NEW: Store match rate
                                         logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
                                         break
                                     elif match_score >= match_threshold:
                                         llm_segments.append(seg)
+                                        match_rates[seg.id] = 0  # NEW: Will use LLM
                                         tm_context[seg.id] = [{'MatchRate': match_score, 'TargetSegment': target_text}]
                                         logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
                                         break
                                 else:
                                     llm_segments.append(seg)
+                                    match_rates[seg.id] = 0  # NEW: No match found
                             else:
                                 llm_segments.append(seg)
                         else:
@@ -895,6 +903,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         
         # 7. Save results
         st.session_state.translation_results = final_translations
+        st.session_state.match_rates = match_rates  # NEW: Store match rates
         st.session_state.translation_log = logger.get_content()
         st.session_state.chat_history = batch_translations_history if llm_segments else []
         
@@ -1118,7 +1127,9 @@ with tab2:
                 final_xml = XMLParser.update_xliff(
                     xliff_file.getvalue(),
                     st.session_state.translation_results,
-                    st.session_state.get('segment_objects', {})
+                    st.session_state.get('segment_objects', {}),
+                    match_rates=st.session_state.get('match_rates', {}),  # NEW: Pass match rates
+                    username=st.session_state.memoq_username if st.session_state.get('memoq_connected') else 'AnovaAI'  # Use AnovaAI as default
                 )
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

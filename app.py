@@ -585,7 +585,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             prompt_builder = PromptBuilder(template_path=config.PROMPT_TEMPLATE_PATH)
             logger.info("Using default prompt template.")
         
-        translator = AITranslator(api_key, model)
+        translator = AITranslator("OpenAI", api_key, model)
         
         status.update(label="Analyzing segments...", state="running")
         

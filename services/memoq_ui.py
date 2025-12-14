@@ -104,7 +104,7 @@ class MemoQUI:
         tgt_lang: str
     ) -> Tuple[List[str], List[str]]:
         """
-        Show memoQ Data Loader UI with TM and TB selection
+        Show memoQ Data Loader UI with searchable dropdown lists
         
         Args:
             client: MemoQServerClient instance
@@ -120,14 +120,16 @@ class MemoQUI:
             st.session_state.memoq_tbs_loaded = False
             st.session_state.memoq_tms_list = []
             st.session_state.memoq_tbs_list = []
-            st.session_state.selected_tm_guids = []
-            st.session_state.selected_tb_guids = []
+            st.session_state.selected_tm_names = []
+            st.session_state.selected_tb_names = []
+            st.session_state.tm_search_filter = ""
+            st.session_state.tb_search_filter = ""
         
         col1, col2 = st.columns([1, 4])
         
         with col1:
             load_button = st.button(
-                "📥 Load memoQ Data",
+                "📥 Load",
                 use_container_width=True,
                 help="Load Translation Memories and Termbases from memoQ Server"
             )
@@ -163,7 +165,7 @@ class MemoQUI:
                     st.error(f"Failed to load memoQ data: {str(e)}")
                     logger.error(f"memoQ data load error: {e}")
         
-        # Display TMs and TBs
+        # Display TMs and TBs with searchable dropdowns
         if st.session_state.memoq_tms_loaded and st.session_state.memoq_tbs_loaded:
             st.divider()
             
@@ -171,89 +173,109 @@ class MemoQUI:
             
             # ==================== TRANSLATION MEMORIES ====================
             with col1:
-                st.subheader("📚 Translation Memories")
+                st.markdown("**📚 Translation Memories**")
                 
                 if st.session_state.memoq_tms_list:
-                    # Create columns for checkboxes and info
-                    tm_selected = []
-                    
+                    # Create full names with metadata
+                    tm_options = {}
                     for tm in st.session_state.memoq_tms_list:
-                        tm_col1, tm_col2 = st.columns([0.5, 3.5])
-                        
-                        with tm_col1:
-                            # Checkbox
-                            is_selected = st.checkbox(
-                                label="Select",
-                                value=tm["TMGuid"] in st.session_state.selected_tm_guids,
-                                key=f"tm_{tm['TMGuid']}"
-                            )
-                            if is_selected:
-                                tm_selected.append(tm["TMGuid"])
-                        
-                        with tm_col2:
-                            # TM Info
-                            st.markdown(f"**{tm['FriendlyName']}**")
-                            st.caption(
-                                f"👥 {tm['SourceLangCode'].upper()} → {tm['TargetLangCode'].upper()} | "
-                                f"📝 {tm.get('NumEntries', 0)} entries | "
-                                f"📂 {tm.get('Domain', 'N/A')}"
-                            )
+                        display_name = f"{tm['FriendlyName']} ({tm['SourceLangCode'].upper()}-{tm['TargetLangCode'].upper()}, {tm.get('NumEntries', 0)} entries)"
+                        tm_options[display_name] = tm["TMGuid"]
                     
-                    # Update selected list
-                    st.session_state.selected_tm_guids = tm_selected
+                    # Search filter
+                    tm_search = st.text_input(
+                        "Search",
+                        value=st.session_state.tm_search_filter,
+                        placeholder="Type to filter TMs...",
+                        key="tm_search_input",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state.tm_search_filter = tm_search
+                    
+                    # Filter options based on search
+                    filtered_tm_options = [
+                        name for name in tm_options.keys()
+                        if tm_search.lower() in name.lower()
+                    ]
+                    
+                    # Multi-select dropdown
+                    selected_tm_names = st.multiselect(
+                        "Select TMs",
+                        options=filtered_tm_options,
+                        default=st.session_state.selected_tm_names,
+                        key="tm_multiselect",
+                        label_visibility="collapsed"
+                    )
+                    
+                    st.session_state.selected_tm_names = selected_tm_names
+                    selected_tm_guids = [tm_options[name] for name in selected_tm_names]
+                    
                 else:
-                    st.info("No Translation Memories found for this language pair")
+                    st.info("No TMs found")
+                    selected_tm_guids = []
             
             # ==================== TERMBASES ====================
             with col2:
-                st.subheader("📖 Termbases")
+                st.markdown("**📖 Termbases**")
                 
                 if st.session_state.memoq_tbs_list:
-                    # Create columns for checkboxes and info
-                    tb_selected = []
-                    
+                    # Create full names with metadata
+                    tb_options = {}
                     for tb in st.session_state.memoq_tbs_list:
-                        tb_col1, tb_col2 = st.columns([0.5, 3.5])
-                        
-                        with tb_col1:
-                            # Checkbox
-                            is_selected = st.checkbox(
-                                label="Select",
-                                value=tb["TBGuid"] in st.session_state.selected_tb_guids,
-                                key=f"tb_{tb['TBGuid']}"
-                            )
-                            if is_selected:
-                                tb_selected.append(tb["TBGuid"])
-                        
-                        with tb_col2:
-                            # TB Info
-                            st.markdown(f"**{tb['FriendlyName']}**")
-                            st.caption(
-                                f"🌐 {', '.join(tb.get('Languages', []))} | "
-                                f"📝 {tb.get('NumEntries', 0)} terms | "
-                                f"📂 {tb.get('Domain', 'N/A')}"
-                            )
+                        display_name = f"{tb['FriendlyName']} ({', '.join(tb.get('Languages', []))}, {tb.get('NumEntries', 0)} terms)"
+                        tb_options[display_name] = tb["TBGuid"]
                     
-                    # Update selected list
-                    st.session_state.selected_tb_guids = tb_selected
+                    # Search filter
+                    tb_search = st.text_input(
+                        "Search",
+                        value=st.session_state.tb_search_filter,
+                        placeholder="Type to filter TBs...",
+                        key="tb_search_input",
+                        label_visibility="collapsed"
+                    )
+                    st.session_state.tb_search_filter = tb_search
+                    
+                    # Filter options based on search
+                    filtered_tb_options = [
+                        name for name in tb_options.keys()
+                        if tb_search.lower() in name.lower()
+                    ]
+                    
+                    # Multi-select dropdown
+                    selected_tb_names = st.multiselect(
+                        "Select TBs",
+                        options=filtered_tb_options,
+                        default=st.session_state.selected_tb_names,
+                        key="tb_multiselect",
+                        label_visibility="collapsed"
+                    )
+                    
+                    st.session_state.selected_tb_names = selected_tb_names
+                    selected_tb_guids = [tb_options[name] for name in selected_tb_names]
+                    
                 else:
-                    st.info("No Termbases found for this language pair")
+                    st.info("No TBs found")
+                    selected_tb_guids = []
             
             # Display summary
             st.divider()
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric("Selected TMs", len(st.session_state.selected_tm_guids))
+                st.metric("Selected TMs", len(selected_tm_guids))
             
             with col2:
-                st.metric("Selected TBs", len(st.session_state.selected_tb_guids))
+                st.metric("Selected TBs", len(selected_tb_guids))
             
             with col3:
-                if st.session_state.selected_tm_guids or st.session_state.selected_tb_guids:
-                    st.success(f"✓ Ready to use {len(st.session_state.selected_tm_guids) + len(st.session_state.selected_tb_guids)} resources")
+                if selected_tm_guids or selected_tb_guids:
+                    st.success(f"✓ Ready: {len(selected_tm_guids) + len(selected_tb_guids)} resources")
         
-        return st.session_state.selected_tm_guids, st.session_state.selected_tb_guids
+        else:
+            selected_tm_guids = []
+            selected_tb_guids = []
+        
+        return selected_tm_guids, selected_tb_guids
     
     @staticmethod
     def _get_memoq_lang_code(lang_code: str) -> str:

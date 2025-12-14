@@ -50,37 +50,45 @@ class MemoQServerClient:
         self._tm_cache = {}
         self._tb_cache = {}
     
-    def authenticate(self) -> bool:
-        """Authenticate and get token"""
+    def login(self) -> bool:
+        """Authenticate with memoQ Server"""
+        url = f"{self.server_url}{self.base_path}/auth/login"
+        payload = {
+            "UserName": self.username,
+            "Password": self.password,
+            "LoginMode": 0
+        }
+        
         try:
-            url = f"{self.server_url}{self.base_path}/auth/login"
-            payload = {
-                "UserName": self.username,
-                "Password": self.password
-            }
-            
             response = requests.post(
                 url,
                 json=payload,
+                headers={"Content-Type": "application/json"},
                 verify=self.verify_ssl,
                 timeout=self.timeout
             )
             response.raise_for_status()
             
             data = response.json()
-            self.token = data.get('Token')
-            expires_in = data.get('ExpiresIn', 3600)
-            self.token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+            self.token = data.get("AccessToken")
+            self.token_expiry = datetime.now() + timedelta(minutes=55)
             
-            return self.token is not None
+            logger.info(f"✓ Authenticated as {data.get('Name')}")
+            return True
+            
         except Exception as e:
-            logger.error(f"Authentication failed: {str(e)}")
-            return False
+            logger.error(f"Login failed: {e}")
+            raise Exception(f"Authentication failed: {str(e)}")
     
     def _ensure_token(self) -> bool:
-        """Ensure valid token, re-authenticate if needed"""
-        if not self.token or (self.token_expiry and datetime.utcnow() > self.token_expiry - timedelta(seconds=self.token_buffer)):
-            return self.authenticate()
+        """Ensure token is valid"""
+        if self.token is None:
+            return self.login()
+        
+        if datetime.now() > (self.token_expiry - timedelta(seconds=self.token_buffer)):
+            logger.warning("Token expiring, refreshing...")
+            return self.login()
+        
         return True
     
     def _make_request(
@@ -130,38 +138,44 @@ class MemoQServerClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP Error: {e.response.status_code} - {e.response.text}")
-            raise
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request Error: {str(e)}")
-            raise
-        except ValueError as e:
-            logger.error(f"JSON Decode Error: {str(e)}")
-            raise
-    
-    def get_translation_memories(self) -> List[Dict]:
-        """Get list of available Translation Memories"""
-        try:
-            endpoint = "/tms"
-            result = self._make_request("GET", endpoint)
-            if isinstance(result, dict) and 'Result' in result:
-                return result['Result']
-            return []
+            try:
+                error_data = response.json()
+                error_code = error_data.get("ErrorCode", "Unknown")
+                error_msg = error_data.get("Message", "")
+                raise Exception(f"{error_code}: {error_msg}")
+            except:
+                raise Exception(f"HTTP {response.status_code}: {str(e)}")
+        
         except Exception as e:
-            logger.error(f"Failed to get TMs: {str(e)}")
-            return []
+            raise Exception(f"Request failed: {str(e)}")
     
-    def get_termbases(self) -> List[Dict]:
-        """Get list of available Termbases"""
-        try:
-            endpoint = "/tbs"
-            result = self._make_request("GET", endpoint)
-            if isinstance(result, dict) and 'Result' in result:
-                return result['Result']
-            return []
-        except Exception as e:
-            logger.error(f"Failed to get TBs: {str(e)}")
-            return []
+    # ==================== TRANSLATION MEMORY ====================
+    
+    def list_tms(
+        self,
+        src_lang: Optional[str] = None,
+        tgt_lang: Optional[str] = None,
+        force_refresh: bool = False
+    ) -> List[Dict]:
+        """List all Translation Memories"""
+        cache_key = f"tms_{src_lang}_{tgt_lang}"
+        
+        if not force_refresh and cache_key in self._tm_cache:
+            return self._tm_cache[cache_key]
+        
+        endpoint = "/tms"
+        params = {}
+        
+        if src_lang:
+            params["srcLang"] = src_lang
+        if tgt_lang:
+            params["targetLang"] = tgt_lang
+        
+        result = self._make_request("GET", endpoint, params=params if params else None)
+        self._tm_cache[cache_key] = result
+        
+        logger.info(f"Listed {len(result)} TMs")
+        return result
     
     def lookup_segments(
         self,
@@ -170,7 +184,7 @@ class MemoQServerClient:
     ) -> Dict:
         """Lookup segments in Translation Memory"""
         segment_objects = [
-            {"Segment": seg}
+            {"Segment": f"<seg>{seg}</seg>"}
             for seg in segments
         ]
         
@@ -188,47 +202,48 @@ class MemoQServerClient:
         """Concordance search in Translation Memory"""
         payload = {
             "SearchExpression": search_terms,
-            "ResultsLimit": results_limit
+            "Options": {
+                "ResultsLimit": results_limit,
+                "Ascending": False,
+                "Column": 3
+            }
         }
-        endpoint = f"/tms/{tm_guid}/concordancesearch"
+        
+        endpoint = f"/tms/{tm_guid}/concordance"
         return self._make_request("POST", endpoint, data=payload)
+    
+    # ==================== TERMBASE ====================
+    
+    def list_tbs(
+        self,
+        languages: Optional[List[str]] = None,
+        force_refresh: bool = False
+    ) -> List[Dict]:
+        """List all Termbases"""
+        cache_key = f"tbs_{'_'.join(languages or [])}"
+        
+        if not force_refresh and cache_key in self._tb_cache:
+            return self._tb_cache[cache_key]
+        
+        endpoint = "/tbs"
+        params = None
+        
+        if languages:
+            params = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
+        
+        result = self._make_request("GET", endpoint, params=params)
+        self._tb_cache[cache_key] = result
+        
+        logger.info(f"Listed {len(result)} TBs")
+        return result
     
     def lookup_terms(
         self,
         tb_guid: str,
-        terms: List[str]
+        search_terms: List[str]
     ) -> Dict:
         """Lookup terms in Termbase"""
-        payload = {"Terms": terms}
+        payload = {"SearchTerms": search_terms}
         endpoint = f"/tbs/{tb_guid}/lookupterms"
+        
         return self._make_request("POST", endpoint, data=payload)
-    
-    def insert_term(
-        self,
-        tb_guid: str,
-        source_lang: str,
-        target_lang: str,
-        source_term: str,
-        target_term: str,
-        definition: str = ""
-    ) -> bool:
-        """Insert a term into Termbase"""
-        payload = {
-            "SourceLanguage": source_lang,
-            "TargetLanguage": target_lang,
-            "SourceTerm": source_term,
-            "TargetTerm": target_term,
-            "Definition": definition
-        }
-        try:
-            endpoint = f"/tbs/{tb_guid}/insertterm"
-            self._make_request("POST", endpoint, data=payload)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to insert term: {str(e)}")
-            return False
-    
-    def close_connection(self):
-        """Close connection and cleanup"""
-        self.token = None
-        self.token_expiry = None

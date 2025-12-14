@@ -5,20 +5,27 @@ import os
 APP_NAME = "Enhanced Translation Assistant"
 VERSION = "1.0.0"
 
-# Language Settings
+# Language Settings - Keys are memoQ 3-letter codes
 SUPPORTED_LANGUAGES = {
-    "bg": "Bulgarian",
-    "en": "English",
-    "de": "German",
-    "fr": "French",
-    "es": "Spanish",
-    "it": "Italian",
-    "ro": "Romanian",
-    "tr": "Turkish",
-    "cs": "Czech",
-    "pl": "Polish",
-    "nl": "Dutch",
-    "pt": "Portuguese"
+    "bul": "Bulgarian",
+    "eng": "English",
+    "eng-GB": "English (UK)",
+    "eng-US": "English (US)",
+    "eng-AU": "English (Australia)",
+    "eng-CA": "English (Canada)",
+    "eng-IE": "English (Ireland)",
+    "eng-NZ": "English (New Zealand)",
+    "eng-ZA": "English (South Africa)",
+    "ger": "German",
+    "fra": "French",
+    "spa": "Spanish",
+    "ita": "Italian",
+    "ron": "Romanian",
+    "tur": "Turkish",
+    "ces": "Czech",
+    "pol": "Polish",
+    "nld": "Dutch",
+    "por": "Portuguese"
 }
 
 # Processing Settings
@@ -33,7 +40,6 @@ MAX_RETRIES = 3
 
 # AI Model Settings
 OPENAI_MODELS = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini", "o3", "o4-mini"]
-ANTHROPIC_MODELS = ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"]
 
 # File Paths
 RESOURCES_DIR = "resources"

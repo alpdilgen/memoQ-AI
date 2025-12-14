@@ -30,7 +30,7 @@ class MemoQUI:
             if 'memoq_server_url' not in st.session_state:
                 st.session_state.memoq_server_url = "https://mirage.memoq.com:9091/adaturkey"
             if 'memoq_username' not in st.session_state:
-                st.session_state.memoq_username = "promotloc"
+                st.session_state.memoq_username = "AnovaAI"
             if 'memoq_password' not in st.session_state:
                 st.session_state.memoq_password = ""
             if 'memoq_verify_ssl' not in st.session_state:

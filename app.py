@@ -84,8 +84,8 @@ with st.sidebar:
     
     lang_keys = list(config.SUPPORTED_LANGUAGES.keys())
     
-    src_default = lang_keys.index(detected_src) if detected_src in lang_keys else lang_keys.index('en')
-    tgt_default = lang_keys.index(detected_tgt) if detected_tgt in lang_keys else lang_keys.index('tr')
+    src_default = lang_keys.index(detected_src) if detected_src in lang_keys else lang_keys.index('eng')
+    tgt_default = lang_keys.index(detected_tgt) if detected_tgt in lang_keys else lang_keys.index('tur')
     
     src_code = st.selectbox(
         "Source Language", 
@@ -107,13 +107,8 @@ with st.sidebar:
     
     # AI Settings
     st.subheader("🤖 AI Settings")
-    provider = st.radio("Provider", ["OpenAI", "Anthropic"])
     api_key = st.text_input("API Key", type="password")
-    
-    if provider == "OpenAI":
-        model = st.selectbox("Model", config.OPENAI_MODELS)
-    else:
-        model = st.selectbox("Model", config.ANTHROPIC_MODELS)
+    model = st.selectbox("Model", config.OPENAI_MODELS)
     
     st.divider()
     

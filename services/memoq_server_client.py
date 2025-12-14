@@ -64,9 +64,10 @@ class MemoQServerClient:
         """Authenticate with memoQ Server"""
         url = f"{self.server_url}{self.base_path}/auth/login"
         payload = {
-            "UserName": self.username,
-            "Password": self.password,
-            "LoginMode": 0
+            # Field names follow memoQ Resources API docs
+            "username": self.username,
+            "password": self.password,
+            "LoginMode": 0,
         }
 
         try:

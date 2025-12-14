@@ -12,13 +12,16 @@ from services.embedding_matcher import EmbeddingMatcher, get_embedding_cost_esti
 from utils.xml_parser import XMLParser
 from utils.logger import TransactionLogger
 import config
-
+from services.memoq_server_client import MemoQServerClient
+from services.memoq_ui import MemoQUI
 # --- Setup ---
 st.set_page_config(page_title=config.APP_NAME, layout="wide", page_icon="🌍")
 
 # Session state initialization
 if 'translation_results' not in st.session_state:
     st.session_state.translation_results = {}
+if 'match_rates' not in st.session_state:  # NEW: Initialize match_rates
+    st.session_state.match_rates = {}
 if 'segment_objects' not in st.session_state:
     st.session_state.segment_objects = {}
 if 'translation_log' not in st.session_state:
@@ -49,6 +52,28 @@ if 'reference_embeddings_ready' not in st.session_state:
 if 'dnt_terms' not in st.session_state:
     st.session_state.dnt_terms = []
 
+# memoQ Server state
+if 'memoq_server_url' not in st.session_state:
+    st.session_state.memoq_server_url = "https://mirage.memoq.com:9091/adaturkey"
+if 'memoq_username' not in st.session_state:
+    st.session_state.memoq_username = ""
+if 'memoq_password' not in st.session_state:
+    st.session_state.memoq_password = ""
+if 'memoq_verify_ssl' not in st.session_state:
+    st.session_state.memoq_verify_ssl = False
+if 'memoq_connected' not in st.session_state:
+    st.session_state.memoq_connected = False
+if 'memoq_client' not in st.session_state:
+    st.session_state.memoq_client = None
+if 'selected_tm_guids' not in st.session_state:
+    st.session_state.selected_tm_guids = []
+if 'selected_tb_guids' not in st.session_state:
+    st.session_state.selected_tb_guids = []
+if 'memoq_tms_list' not in st.session_state:
+    st.session_state.memoq_tms_list = []
+if 'memoq_tbs_list' not in st.session_state:
+    st.session_state.memoq_tbs_list = []
+
 # --- Sidebar ---
 with st.sidebar:
     st.title("⚙️ Configuration")
@@ -59,10 +84,61 @@ with st.sidebar:
     detected_src = st.session_state.detected_languages.get('source')
     detected_tgt = st.session_state.detected_languages.get('target')
     
+    # Convert detected ISO codes (en-gb) to memoQ codes (eng-GB)
+    if detected_src:
+        parts = detected_src.split('-')
+        if len(parts) == 2:
+            # en-gb -> eng-GB
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            base = base_lang_map.get(parts[0], parts[0])
+            detected_src = f"{base}-{parts[1].upper()}"
+        else:
+            # Single code like 'en' -> 'eng'
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            detected_src = base_lang_map.get(detected_src, detected_src)
+    
+    if detected_tgt:
+        parts = detected_tgt.split('-')
+        if len(parts) == 2:
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            base = base_lang_map.get(parts[0], parts[0])
+            detected_tgt = f"{base}-{parts[1].upper()}"
+        else:
+            base_lang_map = {
+                'en': 'eng', 'tr': 'tur', 'de': 'ger', 'fr': 'fra', 'es': 'spa',
+                'it': 'ita', 'pt': 'por', 'pl': 'pol', 'ru': 'rus', 'ja': 'jpn',
+                'zh': 'zho', 'ar': 'ara', 'ko': 'kor', 'nl': 'nld', 'sv': 'swe',
+                'no': 'nor', 'da': 'dan', 'fi': 'fin', 'el': 'ell', 'he': 'heb',
+                'th': 'tha', 'vi': 'vie', 'bg': 'bul', 'ro': 'ron', 'cs': 'ces',
+                'sk': 'slk', 'uk': 'ukr', 'et': 'est', 'lv': 'lav', 'lt': 'lit'
+            }
+            detected_tgt = base_lang_map.get(detected_tgt, detected_tgt)
+    
     lang_keys = list(config.SUPPORTED_LANGUAGES.keys())
     
-    src_default = lang_keys.index(detected_src) if detected_src in lang_keys else lang_keys.index('en')
-    tgt_default = lang_keys.index(detected_tgt) if detected_tgt in lang_keys else lang_keys.index('tr')
+    src_default = lang_keys.index(detected_src) if detected_src in lang_keys else lang_keys.index('eng')
+    tgt_default = lang_keys.index(detected_tgt) if detected_tgt in lang_keys else lang_keys.index('tur')
     
     src_code = st.selectbox(
         "Source Language", 
@@ -84,13 +160,8 @@ with st.sidebar:
     
     # AI Settings
     st.subheader("🤖 AI Settings")
-    provider = st.radio("Provider", ["OpenAI", "Anthropic"])
     api_key = st.text_input("API Key", type="password")
-    
-    if provider == "OpenAI":
-        model = st.selectbox("Model", config.OPENAI_MODELS)
-    else:
-        model = st.selectbox("Model", config.ANTHROPIC_MODELS)
+    model = st.selectbox("Model", config.OPENAI_MODELS)
     
     st.divider()
     
@@ -141,6 +212,68 @@ with st.sidebar:
             st.rerun()
     else:
         st.caption("No cached TMs")
+
+# ==================== memoQ SERVER CONNECTION ====================
+    st.divider()
+    st.subheader("🔗 memoQ Server")
+    
+    with st.form("memoq_connection_form"):
+        memoq_url = st.text_input(
+            "Server URL",
+            value=st.session_state.memoq_server_url,
+            help="memoQ Server base URL",
+            key="memoq_url_input"
+        )
+        
+        memoq_user = st.text_input(
+            "Username",
+            value=st.session_state.memoq_username,
+            key="memoq_user_input"
+        )
+        
+        memoq_pass = st.text_input(
+            "Password",
+            type="password",
+            value=st.session_state.memoq_password,
+            key="memoq_pass_input"
+        )
+        
+        memoq_ssl = st.checkbox(
+            "Verify SSL",
+            value=st.session_state.memoq_verify_ssl,
+            help="Disable for self-signed certificates"
+        )
+        
+        memoq_connect = st.form_submit_button("🔐 Connect", use_container_width=True)
+    
+    if memoq_connect:
+        st.session_state.memoq_server_url = memoq_url
+        st.session_state.memoq_username = memoq_user
+        st.session_state.memoq_password = memoq_pass
+        st.session_state.memoq_verify_ssl = memoq_ssl
+        
+        try:
+            client = MemoQServerClient(
+                server_url=memoq_url,
+                username=memoq_user,
+                password=memoq_pass,
+                verify_ssl=memoq_ssl
+            )
+            client.login()
+            st.session_state.memoq_client = client
+            st.session_state.memoq_connected = True
+            st.success("✓ Connected to memoQ Server")
+        except Exception as e:
+            st.error(f"Connection failed: {str(e)}")
+            st.session_state.memoq_connected = False
+            st.session_state.memoq_client = None
+    
+    if st.session_state.memoq_connected and st.session_state.memoq_client:
+        st.success("✓ Connected to memoQ Server")
+        if st.button("🔌 Disconnect", use_container_width=True):
+            st.session_state.memoq_connected = False
+            st.session_state.memoq_client = None
+            st.rerun()
     
     # Show if using generated prompt
     if st.session_state.use_generated_prompt and st.session_state.generated_prompt:
@@ -430,7 +563,7 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 
 # --- Main Translation Logic ---
 
-def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None):
+def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
     if not api_key:
         st.error("Please provide an API Key.")
         return
@@ -493,6 +626,22 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             st.write(f"✅ Termbase Ready: {tb_matcher.term_count:,} terms")
             logger.info(f"Termbase loaded: {tb_matcher.term_count} terms (columns: {tb_matcher.src_col} → {tb_matcher.tgt_col})")
         
+        # 3.5 Initialize memoQ Server client if TMs/TBs selected
+        memoq_client = None
+        if memoq_tm_guids or memoq_tb_guids:
+            try:
+                if st.session_state.get('memoq_client'):
+                    memoq_client = st.session_state.memoq_client
+                    st.write(f"🔗 Using memoQ Server TM/TB resources")
+                    if memoq_tm_guids:
+                        st.write(f"   • {len(memoq_tm_guids)} Translation Memory(ies)")
+                    if memoq_tb_guids:
+                        st.write(f"   • {len(memoq_tb_guids)} Termbase(s)")
+                    logger.info(f"memoQ Server: {len(memoq_tm_guids)} TMs, {len(memoq_tb_guids)} TBs")
+            except Exception as e:
+                st.warning(f"Could not connect to memoQ Server: {str(e)}")
+                logger.info(f"memoQ connection error: {e}")
+        
         # 4. Initialize Prompt Builder
         # Priority: Generated prompt > Custom file > Default
         if st.session_state.use_generated_prompt and st.session_state.generated_prompt:
@@ -505,7 +654,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             prompt_builder = PromptBuilder(template_path=config.PROMPT_TEMPLATE_PATH)
             logger.info("Using default prompt template.")
         
-        translator = AITranslator(provider, api_key, model)
+        translator = AITranslator("OpenAI", api_key, model)
         
         status.update(label="Analyzing segments...", state="running")
         
@@ -513,6 +662,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         bypass_segments = []
         llm_segments = []
         final_translations = {}
+        match_rates = {}  # NEW: Track match rates for each segment
         tm_context = {}
         tb_context = {}
         
@@ -529,12 +679,84 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 if should_bypass and tm_translation:
                     bypass_segments.append(seg)
                     final_translations[seg.id] = apply_tm_to_segment(seg.source, tm_translation)
+                    match_rates[seg.id] = int(match_score)  # NEW: Store match rate
                     logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% TM match)")
                 else:
                     llm_segments.append(seg)
+                    match_rates[seg.id] = 0  # NEW: 0 for LLM segments
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
+            # Check memoQ TMs if available
+            elif memoq_client and memoq_tm_guids:
+                try:
+                    for tm_guid in memoq_tm_guids:
+                        results = None
+                        retry_count = 0
+                        max_retries = 2
+                        
+                        # Retry logic for HTTP 500 errors
+                        while results is None and retry_count < max_retries:
+                            try:
+                                results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                                if results:
+                                    break
+                            except Exception as retry_err:
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    import time
+                                    time.sleep(1)  # Wait 1 second before retry
+                                    logger.info(f"[{seg.id}] Retry {retry_count}/{max_retries-1} after error: {str(retry_err)}")
+                                else:
+                                    logger.info(f"[{seg.id}] memoQ lookup failed after {max_retries} attempts: {str(retry_err)}")
+                                    results = None
+                        
+                        if results and isinstance(results, dict):
+                            # Parse memoQ response structure
+                            result_list = results.get('Result', [])
+                            
+                            if result_list and len(result_list) > 0:
+                                tm_hits = result_list[0].get('TMHits', [])
+                                
+                                if tm_hits:
+                                    # Get the first match
+                                    hit = tm_hits[0]
+                                    match_score = hit.get('MatchRate', 0)  # MatchRate not MatchScore
+                                    trans_unit = hit.get('TransUnit', {})
+                                    
+                                    # Extract target from <seg> tags
+                                    target_segment = trans_unit.get('TargetSegment', '')
+                                    if target_segment:
+                                        # Remove <seg></seg> tags
+                                        target_text = target_segment.replace('<seg>', '').replace('</seg>', '')
+                                    else:
+                                        target_text = seg.source
+                                    
+                                    logger.info(f"[{seg.id}] memoQ match score: {match_score}%")
+                                    
+                                    if match_score >= acceptance_threshold:
+                                        bypass_segments.append(seg)
+                                        final_translations[seg.id] = target_text
+                                        match_rates[seg.id] = int(match_score)  # Store match rate
+                                        logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
+                                        break
+                                    elif match_score >= match_threshold:
+                                        llm_segments.append(seg)
+                                        match_rates[seg.id] = 0  # Will use LLM
+                                        tm_context[seg.id] = [{'MatchRate': match_score, 'TargetSegment': target_text}]
+                                        logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
+                                        break
+                                else:
+                                    llm_segments.append(seg)
+                                    match_rates[seg.id] = 0  # No match found
+                            else:
+                                llm_segments.append(seg)
+                        else:
+                            llm_segments.append(seg)
+                except Exception as e:
+                    logger.info(f"memoQ TM lookup error for {seg.id}: {str(e)}")
+                    llm_segments.append(seg)
+                    match_rates[seg.id] = 0
             else:
                 llm_segments.append(seg)
             
@@ -542,6 +764,16 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 tb_matches = tb_matcher.extract_matches(seg.source)
                 if tb_matches:
                     tb_context[seg.id] = tb_matches
+            # Check memoQ TBs if available
+            elif memoq_client and memoq_tb_guids and seg in llm_segments:
+                try:
+                    for tb_guid in memoq_tb_guids:
+                        tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
+                        if tb_results:
+                            tb_context[seg.id] = tb_results
+                            break
+                except Exception as e:
+                    logger.info(f"memoQ TB lookup error for {seg.id}: {e}")
             
             analysis_progress.progress((i + 1) / len(segments))
         
@@ -689,6 +921,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         
         # 7. Save results
         st.session_state.translation_results = final_translations
+        st.session_state.match_rates = match_rates  # NEW: Store match rates
         st.session_state.translation_log = logger.get_content()
         st.session_state.chat_history = batch_translations_history if llm_segments else []
         
@@ -730,17 +963,31 @@ with tab1:
                 }
                 st.caption(f"🔍 Detected: {detected_src} → {detected_tgt}")
         
-        tmx_file = st.file_uploader(
-            "📚 Upload TM (TMX)", 
-            type=['tmx'],
-            help="Translation Memory file"
-        )
+        # ==================== memoQ SERVER RESOURCES ====================
+        st.markdown("---")
+        st.markdown("##### 🔗 memoQ Server Resources")
         
-        csv_file = st.file_uploader(
-            "📖 Upload Termbase (CSV)", 
-            type=['csv'],
-            help="MemoQ exported or simple 2-column CSV"
-        )
+        if st.session_state.memoq_connected and st.session_state.memoq_client:
+            # Load TM/TB data
+            selected_tms, selected_tbs = MemoQUI.show_memoq_data_loader(
+                client=st.session_state.memoq_client,
+                src_lang=src_code,
+                tgt_lang=tgt_code
+            )
+            
+            # Store selections
+            st.session_state.selected_tm_guids = selected_tms
+            st.session_state.selected_tb_guids = selected_tbs
+            
+            # Show status
+            if selected_tms or selected_tbs:
+                st.info(
+                    f"✓ Using {len(selected_tms)} TM(s) and {len(selected_tbs)} TB(s) from memoQ Server"
+                )
+        else:
+            st.warning("🔗 Not connected to memoQ Server. Configure connection in sidebar.")
+        
+        st.markdown("---")
         
         # Reference file for style/tone with semantic matching
         st.markdown("---")
@@ -857,8 +1104,6 @@ with tab1:
         if st.button("🚀 Start Translation", type="primary", use_container_width=True):
             if xliff_file:
                 xliff_file.seek(0)
-                if tmx_file: tmx_file.seek(0)
-                if csv_file: csv_file.seek(0)
                 
                 custom_prompt = None
                 if prompt_file and not st.session_state.use_generated_prompt:
@@ -867,9 +1112,11 @@ with tab1:
                 
                 process_translation(
                     xliff_file.getvalue(),
-                    tmx_file.getvalue() if tmx_file else None,
-                    csv_file.getvalue() if csv_file else None,
-                    custom_prompt_content=custom_prompt
+                    tmx_bytes=None,
+                    csv_bytes=None,
+                    custom_prompt_content=custom_prompt,
+                    memoq_tm_guids=st.session_state.selected_tm_guids,
+                    memoq_tb_guids=st.session_state.selected_tb_guids
                 )
             else:
                 st.error("XLIFF file is required.")
@@ -898,7 +1145,9 @@ with tab2:
                 final_xml = XMLParser.update_xliff(
                     xliff_file.getvalue(),
                     st.session_state.translation_results,
-                    st.session_state.get('segment_objects', {})
+                    st.session_state.get('segment_objects', {}),
+                    match_rates=st.session_state.get('match_rates', {}),  # NEW: Pass match rates
+                    username=st.session_state.memoq_username if st.session_state.get('memoq_connected') else 'AnovaAI'  # Use AnovaAI as default
                 )
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

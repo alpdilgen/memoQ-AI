@@ -687,23 +687,40 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 try:
                     for tm_guid in memoq_tm_guids:
                         results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                        st.write(f"DEBUG: memoQ lookup for '{seg.source}' returned: {results}")
+                        logger.info(f"DEBUG: memoQ lookup for seg {seg.id}: {results}")
+                        
                         if results:
-                            match_result = results[0]
-                            match_score = match_result.get('MatchScore', 0)
+                            # Handle both list and dict responses
+                            if isinstance(results, dict) and 'Results' in results:
+                                match_results = results.get('Results', [])
+                            elif isinstance(results, list):
+                                match_results = results
+                            else:
+                                match_results = []
                             
-                            if match_score >= acceptance_threshold:
-                                bypass_segments.append(seg)
-                                final_translations[seg.id] = match_result.get('TargetSegment', seg.source)
-                                logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% memoQ TM match)")
-                                break
-                            elif match_score >= match_threshold:
-                                llm_segments.append(seg)
-                                tm_context[seg.id] = [match_result]
-                                break
+                            if match_results:
+                                match_result = match_results[0]
+                                match_score = match_result.get('MatchScore', 0)
+                                
+                                st.write(f"DEBUG: Match score for {seg.id}: {match_score}")
+                                logger.info(f"DEBUG: {seg.id} match score: {match_score}")
+                                
+                                if match_score >= acceptance_threshold:
+                                    bypass_segments.append(seg)
+                                    final_translations[seg.id] = match_result.get('TargetSegment', seg.source)
+                                    logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% memoQ TM match)")
+                                    break
+                                elif match_score >= match_threshold:
+                                    llm_segments.append(seg)
+                                    tm_context[seg.id] = [match_result]
+                                    logger.info(f"[{seg.id}] CONTEXT ({match_score:.0f}% memoQ fuzzy match)")
+                                    break
                     else:
                         llm_segments.append(seg)
                 except Exception as e:
                     logger.info(f"memoQ TM lookup error for {seg.id}: {e}")
+                    st.write(f"DEBUG: memoQ error for {seg.id}: {e}")
                     llm_segments.append(seg)
             else:
                 llm_segments.append(seg)

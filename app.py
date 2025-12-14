@@ -694,11 +694,12 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                         results = None
                         retry_count = 0
                         max_retries = 2
+                        search_text = seg.source
                         
                         # Retry logic for HTTP 500 errors
                         while results is None and retry_count < max_retries:
                             try:
-                                results = memoq_client.lookup_segments(tm_guid, [seg.source])
+                                results = memoq_client.lookup_segments(tm_guid, [search_text])
                                 if results:
                                     break
                             except Exception as retry_err:
@@ -747,12 +748,39 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                         logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
                                         break
                                 else:
+                                    # No hits found - try fallback for & segments
+                                    if '&' in search_text and retry_count == 0:
+                                        logger.info(f"[{seg.id}] No match for '{search_text}' - trying fallback searches")
+                                        # Try with "and" instead of &
+                                        fallback_text = search_text.replace(' & ', ' and ')
+                                        try:
+                                            fallback_results = memoq_client.lookup_segments(tm_guid, [fallback_text])
+                                            if fallback_results:
+                                                fallback_hits = fallback_results.get('Result', [{}])[0].get('TMHits', [])
+                                                if fallback_hits:
+                                                    hit = fallback_hits[0]
+                                                    match_score = hit.get('MatchRate', 0)
+                                                    trans_unit = hit.get('TransUnit', {})
+                                                    target_segment = trans_unit.get('TargetSegment', '')
+                                                    if target_segment:
+                                                        target_text = target_segment.replace('<seg>', '').replace('</seg>', '')
+                                                        if match_score >= acceptance_threshold:
+                                                            bypass_segments.append(seg)
+                                                            final_translations[seg.id] = target_text
+                                                            match_rates[seg.id] = int(match_score)
+                                                            logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ fallback match)")
+                                                            break
+                                        except Exception as fallback_err:
+                                            logger.info(f"[{seg.id}] Fallback search also failed: {str(fallback_err)}")
+                                    
                                     llm_segments.append(seg)
                                     match_rates[seg.id] = 0  # No match found
                             else:
                                 llm_segments.append(seg)
+                                match_rates[seg.id] = 0
                         else:
                             llm_segments.append(seg)
+                            match_rates[seg.id] = 0
                 except Exception as e:
                     logger.info(f"memoQ TM lookup error for {seg.id}: {str(e)}")
                     llm_segments.append(seg)

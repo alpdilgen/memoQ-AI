@@ -138,13 +138,17 @@ class MemoQServerClient:
             return response.json()
             
         except requests.exceptions.HTTPError as e:
+            # Try to bubble up memoQ error payloads for easier debugging
             try:
                 error_data = response.json()
                 error_code = error_data.get("ErrorCode", "Unknown")
                 error_msg = error_data.get("Message", "")
                 raise Exception(f"{error_code}: {error_msg}")
-            except:
-                raise Exception(f"HTTP {response.status_code}: {str(e)}")
+            except Exception:
+                # If response is not JSON, include text for context
+                raise Exception(
+                    f"HTTP {response.status_code}: {str(e)} | Response: {response.text}"
+                )
         
         except Exception as e:
             raise Exception(f"Request failed: {str(e)}")
@@ -180,18 +184,26 @@ class MemoQServerClient:
     def lookup_segments(
         self,
         tm_guid: str,
-        segments: List[str]
+        segments: List[str],
+        source_lang: Optional[str] = None,
+        target_lang: Optional[str] = None,
     ) -> Dict:
         """Lookup segments in Translation Memory"""
         segment_objects = [
             {"Segment": seg}
             for seg in segments
         ]
-        
+
         payload = {"Segments": segment_objects}
         endpoint = f"/tms/{tm_guid}/lookupsegments"
-        
-        return self._make_request("POST", endpoint, data=payload)
+
+        params = {}
+        if source_lang:
+            params["srcLang"] = source_lang
+        if target_lang:
+            params["targetLang"] = target_lang
+
+        return self._make_request("POST", endpoint, data=payload, params=params or None)
     
     def concordance_search(
         self,
@@ -240,10 +252,16 @@ class MemoQServerClient:
     def lookup_terms(
         self,
         tb_guid: str,
-        search_terms: List[str]
+        search_terms: List[str],
+        languages: Optional[List[str]] = None
     ) -> Dict:
         """Lookup terms in Termbase"""
         payload = {"SearchTerms": search_terms}
+
+        params = None
+        if languages:
+            params = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
+
         endpoint = f"/tbs/{tb_guid}/lookupterms"
-        
-        return self._make_request("POST", endpoint, data=payload)
+
+        return self._make_request("POST", endpoint, data=payload, params=params)

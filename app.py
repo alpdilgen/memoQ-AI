@@ -52,7 +52,7 @@ if 'dnt_terms' not in st.session_state:
 
 # memoQ Server state
 if 'memoq_server_url' not in st.session_state:
-    st.session_state.memoq_server_url = "https://mirage.memoq.com:8091/adaturkey"
+    st.session_state.memoq_server_url = "https://mirage.memoq.com:9091/adaturkey"
 if 'memoq_username' not in st.session_state:
     st.session_state.memoq_username = ""
 if 'memoq_password' not in st.session_state:

@@ -859,23 +859,11 @@ with tab1:
                 }
                 st.caption(f"🔍 Detected: {detected_src} → {detected_tgt}")
         
-        tmx_file = st.file_uploader(
-            "📚 Upload TM (TMX)", 
-            type=['tmx'],
-            help="Translation Memory file"
-        )
+        # ==================== memoQ SERVER RESOURCES ====================
+        st.markdown("---")
+        st.markdown("##### 🔗 memoQ Server Resources")
         
-        csv_file = st.file_uploader(
-            "📖 Upload Termbase (CSV)", 
-            type=['csv'],
-            help="MemoQ exported or simple 2-column CSV"
-        )
-        
-        # ==================== memoQ SERVER RESOURCES (if no local TM/TB uploaded) ====================
-        if not tmx_file and not csv_file and st.session_state.memoq_connected and st.session_state.memoq_client:
-            st.markdown("---")
-            st.markdown("##### 🔗 memoQ Server Resources")
-            
+        if st.session_state.memoq_connected and st.session_state.memoq_client:
             # Load TM/TB data
             selected_tms, selected_tbs = MemoQUI.show_memoq_data_loader(
                 client=st.session_state.memoq_client,
@@ -892,16 +880,10 @@ with tab1:
                 st.info(
                     f"✓ Using {len(selected_tms)} TM(s) and {len(selected_tbs)} TB(s) from memoQ Server"
                 )
-            
-            st.markdown("---")
-        elif tmx_file or csv_file:
-            # Traditional workflow - show message that local files are being used
-            st.markdown("---")
-            if tmx_file:
-                st.success("✓ Using uploaded TMX file as Translation Memory")
-            if csv_file:
-                st.success("✓ Using uploaded CSV file as Termbase")
-            st.markdown("---")
+        else:
+            st.warning("🔗 Not connected to memoQ Server. Configure connection in sidebar.")
+        
+        st.markdown("---")
         
         # Reference file for style/tone with semantic matching
         st.markdown("---")
@@ -1018,8 +1000,6 @@ with tab1:
         if st.button("🚀 Start Translation", type="primary", use_container_width=True):
             if xliff_file:
                 xliff_file.seek(0)
-                if tmx_file: tmx_file.seek(0)
-                if csv_file: csv_file.seek(0)
                 
                 custom_prompt = None
                 if prompt_file and not st.session_state.use_generated_prompt:
@@ -1028,11 +1008,11 @@ with tab1:
                 
                 process_translation(
                     xliff_file.getvalue(),
-                    tmx_file.getvalue() if tmx_file else None,
-                    csv_file.getvalue() if csv_file else None,
+                    tmx_bytes=None,
+                    csv_bytes=None,
                     custom_prompt_content=custom_prompt,
-                    memoq_tm_guids=st.session_state.selected_tm_guids if not tmx_file else [],
-                    memoq_tb_guids=st.session_state.selected_tb_guids if not csv_file else []
+                    memoq_tm_guids=st.session_state.selected_tm_guids,
+                    memoq_tb_guids=st.session_state.selected_tb_guids
                 )
             else:
                 st.error("XLIFF file is required.")

@@ -5,6 +5,7 @@ Handles communication with memoQ Server for TM and TB operations
 
 import requests
 import logging
+import html
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
@@ -29,7 +30,7 @@ class MemoQServerClient:
         Initialize memoQ Server connection
         
         Args:
-            server_url: Base URL (e.g., https://mirage.memoq.com:8091/adaturkey)
+            server_url: Base URL (e.g., https://mirage.memoq.com:9091/adaturkey)
             username: memoQ username
             password: memoQ password
             verify_ssl: SSL certificate verification
@@ -205,10 +206,13 @@ class MemoQServerClient:
         # Clean segments: remove XML tag placeholders {{1}}, {{2}}, etc.
         cleaned_segments = []
         for seg in segments:
+            # Remove placeholder tags
             clean_text = seg.replace('{{', '').replace('}}', '')
             # Remove digits that were part of placeholders
             parts = clean_text.split()
             clean_text = ' '.join(p for p in parts if p.strip())
+            # Decode HTML entities (&amp; -> &, &lt; -> <, etc.)
+            clean_text = html.unescape(clean_text)
             cleaned_segments.append(clean_text.strip())
         
         # Build correct payload according to memoQ API v1 documentation
@@ -325,6 +329,8 @@ class MemoQServerClient:
             clean_text = term.replace('{{', '').replace('}}', '')
             parts = clean_text.split()
             clean_text = ' '.join(p for p in parts if p.strip())
+            # Decode HTML entities (&amp; -> &, &lt; -> <, etc.)
+            clean_text = html.unescape(clean_text)
             cleaned_terms.append(clean_text.strip())
         
         # Build correct payload according to memoQ API v1 documentation

@@ -29,7 +29,7 @@ class MemoQServerClient:
         Initialize memoQ Server connection
         
         Args:
-            server_url: Base URL (e.g., https://mirage.memoq.com:9091/adaturkey)
+            server_url: Base URL (e.g., https://mirage.memoq.com:8091/adaturkey)
             username: memoQ username
             password: memoQ password
             verify_ssl: SSL certificate verification
@@ -122,6 +122,9 @@ class MemoQServerClient:
                     timeout=self.timeout
                 )
             elif method == "POST":
+                logger.debug(f"POST URL: {url}")
+                logger.debug(f"POST Params: {request_params}")
+                logger.debug(f"POST Data: {data}")
                 response = requests.post(
                     url,
                     json=data,
@@ -133,8 +136,13 @@ class MemoQServerClient:
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
+            logger.debug(f"Response Status: {response.status_code}")
+            logger.debug(f"Response Text: {response.text}")
+            
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            logger.debug(f"Response JSON: {result}")
+            return result
             
         except requests.exceptions.HTTPError as e:
             try:
@@ -146,6 +154,7 @@ class MemoQServerClient:
                 raise Exception(f"HTTP {response.status_code}: {str(e)}")
         
         except Exception as e:
+            logger.error(f"Request failed: {str(e)}")
             raise Exception(f"Request failed: {str(e)}")
     
     # ==================== TRANSLATION MEMORY ====================
@@ -225,15 +234,26 @@ class MemoQServerClient:
         try:
             logger.debug(f"TM lookup payload: {payload}")
             result = self._make_request("POST", endpoint, data=payload)
-            logger.debug(f"TM lookup response: {result}")
-            if result:
-                logger.info(f"TM lookup successful")
-                return result
+            logger.info(f"TM lookup raw response: {result}")
+            
+            # Check if result has hits
+            if result and isinstance(result, dict):
+                result_list = result.get("Result", [])
+                logger.info(f"TM lookup Result count: {len(result_list) if result_list else 0}")
+                
+                if result_list:
+                    for i, segment_result in enumerate(result_list):
+                        hits = segment_result.get("TMHits", [])
+                        logger.info(f"Segment {i+1} TM hits: {len(hits)}")
+                    return result
+                else:
+                    logger.warning(f"TM lookup returned Result but empty")
+                    return {}
             else:
-                logger.warning(f"TM lookup returned empty result")
+                logger.warning(f"TM lookup returned unexpected format: {result}")
                 return {}
         except Exception as e:
-            logger.error(f"TM lookup error: {e}")
+            logger.error(f"TM lookup error: {e}", exc_info=True)
             return {}
     
     def concordance_search(
@@ -323,13 +343,24 @@ class MemoQServerClient:
         try:
             logger.debug(f"TB lookup payload: {payload}")
             result = self._make_request("POST", endpoint, data=payload)
-            logger.debug(f"TB lookup response: {result}")
-            if result:
-                logger.info(f"TB lookup successful")
-                return result
+            logger.info(f"TB lookup raw response: {result}")
+            
+            # Check if result has hits
+            if result and isinstance(result, dict):
+                result_list = result.get("Result", [])
+                logger.info(f"TB lookup Result count: {len(result_list) if result_list else 0}")
+                
+                if result_list:
+                    for i, segment_result in enumerate(result_list):
+                        hits = segment_result.get("TBHits", [])
+                        logger.info(f"Segment {i+1} TB hits: {len(hits)}")
+                    return result
+                else:
+                    logger.warning(f"TB lookup returned Result but empty")
+                    return {}
             else:
-                logger.warning(f"TB lookup returned empty result")
+                logger.warning(f"TB lookup returned unexpected format: {result}")
                 return {}
         except Exception as e:
-            logger.error(f"TB lookup error: {e}")
+            logger.error(f"TB lookup error: {e}", exc_info=True)
             return {}

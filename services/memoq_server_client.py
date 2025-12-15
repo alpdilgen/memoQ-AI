@@ -1,4 +1,3 @@
-# services/memoq_server_client.py
 """
 memoQ Server REST API Client
 Handles communication with memoQ Server for TM and TB operations
@@ -142,7 +141,7 @@ class MemoQServerClient:
                 error_data = response.json()
                 error_code = error_data.get("ErrorCode", "Unknown")
                 error_msg = error_data.get("Message", "")
-                raise Exception(f"{error_code}: {error_msg}")
+                raise Exception(f"HTTP {response.status_code}: {error_code}: {error_msg}")
             except:
                 raise Exception(f"HTTP {response.status_code}: {str(e)}")
         
@@ -231,8 +230,10 @@ class MemoQServerClient:
                 if result:
                     logger.info(f"TM lookup successful with format {i}")
                     return result
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 500:
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a 500 error (retry eligible)
+                if "500" in error_str or "HTTP 500" in error_str:
                     if i < len(payloads_to_try):
                         logger.debug(f"Format {i} failed (500), trying next format...")
                         continue
@@ -244,9 +245,6 @@ class MemoQServerClient:
                     # Non-500 error, don't retry
                     logger.error(f"TM lookup error: {e}")
                     return {}
-            except Exception as e:
-                logger.error(f"TM lookup exception: {e}")
-                return {}
         
         return {}
     
@@ -346,8 +344,10 @@ class MemoQServerClient:
                 if result:
                     logger.info(f"TB lookup successful with format {i}")
                     return result
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 400:
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a 400 error (retry eligible)
+                if "400" in error_str or "HTTP 400" in error_str:
                     if i < len(payloads_to_try):
                         logger.debug(f"Format {i} failed (400), trying next format...")
                         continue
@@ -358,8 +358,5 @@ class MemoQServerClient:
                 else:
                     logger.error(f"TB lookup error: {e}")
                     return {}
-            except Exception as e:
-                logger.error(f"TB lookup exception: {e}")
-                return {}
         
         return {}

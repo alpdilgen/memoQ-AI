@@ -182,16 +182,73 @@ class MemoQServerClient:
         tm_guid: str,
         segments: List[str]
     ) -> Dict:
-        """Lookup segments in Translation Memory"""
-        segment_objects = [
-            {"Segment": seg}
-            for seg in segments
+        """
+        Lookup segments in Translation Memory
+        
+        Args:
+            tm_guid: Translation Memory GUID
+            segments: List of source segments to lookup
+        
+        Returns:
+            API response with matches
+        """
+        # Clean segments: remove XML tag placeholders {{1}}, {{2}}, etc.
+        cleaned_segments = []
+        for seg in segments:
+            clean_text = seg.replace('{{', '').replace('}}', '')
+            # Remove digits that were part of placeholders
+            parts = clean_text.split()
+            clean_text = ' '.join(p for p in parts if p.strip())
+            cleaned_segments.append(clean_text.strip())
+        
+        # Try multiple payload formats for compatibility with different memoQ versions
+        payloads_to_try = [
+            # Format 1: Standard (most common)
+            {
+                "Segments": [
+                    {"Text": seg}
+                    for seg in cleaned_segments
+                ]
+            },
+            # Format 2: Alternative with SourceSegment
+            {
+                "Segments": [
+                    {"SourceSegment": seg}
+                    for seg in cleaned_segments
+                ]
+            },
+            # Format 3: Direct source segment list
+            {
+                "SourceSegments": cleaned_segments
+            }
         ]
         
-        payload = {"Segments": segment_objects}
         endpoint = f"/tms/{tm_guid}/lookupsegments"
         
-        return self._make_request("POST", endpoint, data=payload)
+        for i, payload in enumerate(payloads_to_try, 1):
+            try:
+                result = self._make_request("POST", endpoint, data=payload)
+                if result:
+                    logger.info(f"TM lookup successful with format {i}")
+                    return result
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 500:
+                    if i < len(payloads_to_try):
+                        logger.debug(f"Format {i} failed (500), trying next format...")
+                        continue
+                    else:
+                        logger.error(f"All TM lookup formats failed: {e}")
+                        logger.error(f"Last payload attempted: {payload}")
+                        return {}
+                else:
+                    # Non-500 error, don't retry
+                    logger.error(f"TM lookup error: {e}")
+                    return {}
+            except Exception as e:
+                logger.error(f"TM lookup exception: {e}")
+                return {}
+        
+        return {}
     
     def concordance_search(
         self,
@@ -242,8 +299,67 @@ class MemoQServerClient:
         tb_guid: str,
         search_terms: List[str]
     ) -> Dict:
-        """Lookup terms in Termbase"""
-        payload = {"SearchTerms": search_terms}
+        """
+        Lookup terms in Termbase
+        
+        Args:
+            tb_guid: Termbase GUID
+            search_terms: List of terms to lookup
+        
+        Returns:
+            API response with matching terms
+        """
+        # Clean search terms: remove XML tag placeholders
+        cleaned_terms = []
+        for term in search_terms:
+            clean_text = term.replace('{{', '').replace('}}', '')
+            parts = clean_text.split()
+            clean_text = ' '.join(p for p in parts if p.strip())
+            cleaned_terms.append(clean_text.strip())
+        
         endpoint = f"/tbs/{tb_guid}/lookupterms"
         
-        return self._make_request("POST", endpoint, data=payload)
+        # Try multiple payload formats for compatibility
+        payloads_to_try = [
+            # Format 1: SearchExpressions (most common)
+            {
+                "SearchExpressions": cleaned_terms
+            },
+            # Format 2: With Term and SearchOption
+            {
+                "Term": cleaned_terms[0] if cleaned_terms else "",
+                "SearchOption": "WholeEntry"
+            },
+            # Format 3: SearchTerms (original format)
+            {
+                "SearchTerms": cleaned_terms
+            },
+            # Format 4: SourceTerms
+            {
+                "SourceTerms": cleaned_terms
+            }
+        ]
+        
+        for i, payload in enumerate(payloads_to_try, 1):
+            try:
+                result = self._make_request("POST", endpoint, data=payload)
+                if result:
+                    logger.info(f"TB lookup successful with format {i}")
+                    return result
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 400:
+                    if i < len(payloads_to_try):
+                        logger.debug(f"Format {i} failed (400), trying next format...")
+                        continue
+                    else:
+                        logger.error(f"All TB lookup formats failed: {e}")
+                        logger.error(f"Last payload attempted: {payload}")
+                        return {}
+                else:
+                    logger.error(f"TB lookup error: {e}")
+                    return {}
+            except Exception as e:
+                logger.error(f"TB lookup exception: {e}")
+                return {}
+        
+        return {}

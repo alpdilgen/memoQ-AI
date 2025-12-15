@@ -28,6 +28,8 @@ if 'tm_info' not in st.session_state:
     st.session_state.tm_info = None
 if 'bypass_stats' not in st.session_state:
     st.session_state.bypass_stats = {'bypassed': 0, 'llm_sent': 0}
+if 'match_rates' not in st.session_state:
+    st.session_state.match_rates = {}
 if 'detected_languages' not in st.session_state:
     st.session_state.detected_languages = {'source': None, 'target': None}
 if 'chat_history' not in st.session_state:
@@ -660,6 +662,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         bypass_segments = []
         llm_segments = []
         final_translations = {}
+        match_rates = {}
         tm_context = {}
         tb_context = {}
         
@@ -676,6 +679,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 if should_bypass and tm_translation:
                     bypass_segments.append(seg)
                     final_translations[seg.id] = apply_tm_to_segment(seg.source, tm_translation)
+                    match_rates[seg.id] = int(match_score)
                     logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% TM match)")
                 else:
                     llm_segments.append(seg)
@@ -699,7 +703,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                 if tm_hits:
                                     # Get the first match
                                     hit = tm_hits[0]
-                                    match_score = hit.get('MatchRate', 0)  # MatchRate not MatchScore
+                                    match_score = hit.get('MatchRate', 0)
                                     trans_unit = hit.get('TransUnit', {})
                                     
                                     # Extract target from <seg> tags
@@ -715,11 +719,13 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     if match_score >= acceptance_threshold:
                                         bypass_segments.append(seg)
                                         final_translations[seg.id] = target_text
+                                        match_rates[seg.id] = match_score
                                         logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
                                         break
                                     elif match_score >= match_threshold:
                                         llm_segments.append(seg)
                                         tm_context[seg.id] = [{'MatchRate': match_score, 'TargetSegment': target_text}]
+                                        match_rates[seg.id] = match_score
                                         logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
                                         break
                                 else:
@@ -896,6 +902,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         # 7. Save results
         st.session_state.translation_results = final_translations
         st.session_state.translation_log = logger.get_content()
+        st.session_state.match_rates = match_rates
         st.session_state.chat_history = batch_translations_history if llm_segments else []
         
         status.update(label="✅ Translation Complete!", state="complete")
@@ -1118,7 +1125,8 @@ with tab2:
                 final_xml = XMLParser.update_xliff(
                     xliff_file.getvalue(),
                     st.session_state.translation_results,
-                    st.session_state.get('segment_objects', {})
+                    st.session_state.get('segment_objects', {}),
+                    match_rates=st.session_state.get('match_rates', {})
                 )
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1150,8 +1158,10 @@ with tab2:
         for seg_id, trans in st.session_state.translation_results.items():
             seg_obj = st.session_state.segment_objects.get(seg_id)
             source = seg_obj.source if seg_obj else "N/A"
+            match_rate = st.session_state.match_rates.get(seg_id, "—")
             preview_data.append({
                 'ID': seg_id,
+                'Match %': match_rate,
                 'Source': source[:50] + '...' if len(source) > 50 else source,
                 'Translation': trans[:50] + '...' if len(trans) > 50 else trans
             })

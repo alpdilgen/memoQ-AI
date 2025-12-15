@@ -203,9 +203,10 @@ class MemoQServerClient:
             cleaned_segments.append(clean_text.strip())
         
         # Build correct payload according to memoQ API v1 documentation
+        # IMPORTANT: Segments must be wrapped in <seg> XML tags
         payload = {
             "Segments": [
-                {"Segment": seg}
+                {"Segment": f"<seg>{seg}</seg>"}
                 for seg in cleaned_segments
             ],
             "Options": {
@@ -222,7 +223,9 @@ class MemoQServerClient:
         endpoint = f"/tms/{tm_guid}/lookupsegments"
         
         try:
+            logger.debug(f"TM lookup payload: {payload}")
             result = self._make_request("POST", endpoint, data=payload)
+            logger.debug(f"TM lookup response: {result}")
             if result:
                 logger.info(f"TM lookup successful")
                 return result
@@ -305,9 +308,10 @@ class MemoQServerClient:
             cleaned_terms.append(clean_text.strip())
         
         # Build correct payload according to memoQ API v1 documentation
+        # IMPORTANT: Segments must be wrapped in <seg> XML tags
         payload = {
             "SourceLanguage": src_lang,
-            "Segments": cleaned_terms
+            "Segments": [f"<seg>{term}</seg>" for term in cleaned_terms]
         }
         
         # Add target language if specified
@@ -317,7 +321,9 @@ class MemoQServerClient:
         endpoint = f"/tbs/{tb_guid}/lookupterms"
         
         try:
+            logger.debug(f"TB lookup payload: {payload}")
             result = self._make_request("POST", endpoint, data=payload)
+            logger.debug(f"TB lookup response: {result}")
             if result:
                 logger.info(f"TB lookup successful")
                 return result

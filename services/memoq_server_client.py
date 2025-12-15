@@ -29,7 +29,7 @@ class MemoQServerClient:
         Initialize memoQ Server connection
         
         Args:
-            server_url: Base URL (e.g., https://mirage.memoq.com:8091/adaturkey)
+            server_url: Base URL (e.g., https://mirage.memoq.com:9091/adaturkey)
             username: memoQ username
             password: memoQ password
             verify_ssl: SSL certificate verification

@@ -167,23 +167,10 @@ class XMLParser:
             return []
 
     @staticmethod
-    def update_xliff(
-        original_content: bytes, 
-        translations: Dict[str, str], 
-        segments_map: Dict[str, TranslationSegment],
-        match_rates: Dict[str, int] = None
-    ) -> bytes:
+    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment]) -> bytes:
         """
-        Updates XLIFF with proper tag reconstruction and match rate metadata.
-        
-        Args:
-            original_content: Original XLIFF bytes
-            translations: Dict of segment ID -> translated text
-            segments_map: Dict of segment ID -> TranslationSegment object
-            match_rates: Dict of segment ID -> match percentage (optional)
-        
-        Returns:
-            Updated XLIFF content as bytes
+        Updates XLIFF with proper tag reconstruction.
+        Requires segments_map to access the tag_map for reconstruction.
         """
         ET.register_namespace('', "urn:oasis:names:tc:xliff:document:1.2")
         ET.register_namespace('mq', "MQXliff")
@@ -215,32 +202,6 @@ class XMLParser:
                 else:
                     # Fallback if no tags mapped
                     target.text = trans_text
-                
-                # ===================== ADD MATCH RATE METADATA =====================
-                if match_rates and seg_id in match_rates:
-                    match_rate = match_rates[seg_id]
-                    
-                    # Add mq:percent attribute to trans-unit
-                    trans_unit.set('{MQXliff}percent', str(match_rate))
-                    
-                    # Add mq:insertedmatch element with match details
-                    inserted_match = ET.Element('{MQXliff}insertedmatch')
-                    inserted_match.set('matchtype', '2')
-                    inserted_match.set('source', 'TM')
-                    inserted_match.set('matchrate', str(match_rate))
-                    
-                    # Create source element with original text
-                    source_elem = ET.SubElement(inserted_match, '{urn:oasis:names:tc:xliff:document:1.2}source')
-                    source_elem.set('xml:space', 'preserve')
-                    source_elem.text = segment_obj.source if segment_obj else ""
-                    
-                    # Create target element with translated text
-                    target_elem = ET.SubElement(inserted_match, '{urn:oasis:names:tc:xliff:document:1.2}target')
-                    target_elem.set('xml:space', 'preserve')
-                    target_elem.text = trans_text
-                    
-                    # Insert insertedmatch before closing trans-unit
-                    trans_unit.append(inserted_match)
                 
                 # Update status
                 for key in list(trans_unit.attrib.keys()):

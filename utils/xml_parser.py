@@ -3,6 +3,7 @@ from models.entities import TranslationSegment
 from typing import List, Dict, Tuple, Optional
 import re
 import copy
+from datetime import datetime
 
 class XMLParser:
     
@@ -167,10 +168,25 @@ class XMLParser:
             return []
 
     @staticmethod
-    def update_xliff(original_content: bytes, translations: Dict[str, str], segments_map: Dict[str, TranslationSegment]) -> bytes:
+    def update_xliff(
+        original_content: bytes, 
+        translations: Dict[str, str], 
+        segments_map: Dict[str, TranslationSegment],
+        match_rates: Dict[str, int] = None
+    ) -> bytes:
         """
-        Updates XLIFF with proper tag reconstruction.
-        Requires segments_map to access the tag_map for reconstruction.
+        Updates XLIFF with proper tag reconstruction and match rate metadata.
+        
+        For 100% TM matches, sets proper memoQ attributes and insertedmatch element.
+        
+        Args:
+            original_content: Original XLIFF bytes
+            translations: Dict of segment ID -> translated text
+            segments_map: Dict of segment ID -> TranslationSegment object
+            match_rates: Dict of segment ID -> match percentage (optional)
+        
+        Returns:
+            Updated XLIFF content as bytes
         """
         ET.register_namespace('', "urn:oasis:names:tc:xliff:document:1.2")
         ET.register_namespace('mq', "MQXliff")
@@ -203,10 +219,73 @@ class XMLParser:
                     # Fallback if no tags mapped
                     target.text = trans_text
                 
-                # Update status
-                for key in list(trans_unit.attrib.keys()):
-                    if "status" in key:
-                        trans_unit.attrib[key] = "Translated"
+                # ===================== ADD MATCH RATE METADATA =====================
+                # For 100% TM matches, add proper memoQ metadata
+                if match_rates and seg_id in match_rates and match_rates[seg_id] == 100:
+                    match_rate = match_rates[seg_id]
+                    
+                    # Update trans-unit status attributes for 100% confirmed match
+                    trans_unit.set('{MQXliff}status', 'ManuallyConfirmed')
+                    trans_unit.set('{MQXliff}percent', '100')
+                    trans_unit.set('{MQXliff}translatorcommitmatchrate', '100')
+                    trans_unit.set('{MQXliff}translatorcommitusername', 'System')
+                    trans_unit.set('{MQXliff}translatorcommittimestamp', datetime.now().isoformat() + 'Z')
+                    
+                    # Find or create mq:commitinfos element (should be after mq:originalsource area)
+                    # Remove old mq:commitinfos if exists
+                    old_commitinfos = trans_unit.find('./{MQXliff}commitinfos', ns)
+                    if old_commitinfos is not None:
+                        trans_unit.remove(old_commitinfos)
+                    
+                    # Create new commitinfos with commitinfo
+                    commitinfos = ET.Element('{MQXliff}commitinfos')
+                    commitinfos.set('{http://www.w3.org/2000/xmlns/}xmlns', 'MQXliff')
+                    
+                    commitinfo = ET.SubElement(commitinfos, '{MQXliff}commitinfo')
+                    commitinfo.set('matchrate', '100')
+                    commitinfo.set('role', '1000')
+                    commitinfo.set('timestamp', datetime.now().isoformat() + 'Z')
+                    commitinfo.set('username', 'System')
+                    commitinfo.set('editingtime', '0')
+                    
+                    # Insert commitinfos after mq:originalsource
+                    # For now, just append it (will be after other elements)
+                    trans_unit.append(commitinfos)
+                    
+                    # Create and add mq:insertedmatch element
+                    # This shows the TM match that was used
+                    inserted_match = ET.Element('{MQXliff}insertedmatch')
+                    inserted_match.set('matchtype', '0')  # matchtype 0 = 100% confirmed match
+                    inserted_match.set('source', 'TM / System')
+                    inserted_match.set('matchrate', '100')
+                    inserted_match.set('originalmatchrate', '0')
+                    inserted_match.set('ambiguousexact', 'false')
+                    inserted_match.set('setsegmentswhensplittingintorows', 'false')
+                    inserted_match.set('hitfororiginalsegementversion', 'false')
+                    
+                    # Add source and target into insertedmatch
+                    source_elem = ET.SubElement(inserted_match, '{urn:oasis:names:tc:xliff:document:1.2}source')
+                    source_elem.set('xml:space', 'preserve')
+                    source_elem.text = segment_obj.source if segment_obj else ""
+                    
+                    target_elem = ET.SubElement(inserted_match, '{urn:oasis:names:tc:xliff:document:1.2}target')
+                    target_elem.set('xml:space', 'preserve')
+                    target_elem.text = trans_text
+                    
+                    # Append insertedmatch
+                    trans_unit.append(inserted_match)
+                
+                # Update status for non-100% matches
+                elif match_rates and seg_id in match_rates:
+                    # For fuzzy or other matches, just mark as Translated
+                    for key in list(trans_unit.attrib.keys()):
+                        if "status" in key:
+                            trans_unit.attrib[key] = "Translated"
+                else:
+                    # No match info - mark as Translated
+                    for key in list(trans_unit.attrib.keys()):
+                        if "status" in key:
+                            trans_unit.attrib[key] = "Translated"
 
         # Final string generation and repair
         output_str = ET.tostring(root, encoding='unicode')

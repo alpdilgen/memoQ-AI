@@ -683,6 +683,8 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         analysis_progress = st.progress(0)
         
         for i, seg in enumerate(segments):
+            segment_matched = False  # Track if segment was already processed
+            
             if tm_matcher:
                 should_bypass, tm_translation, match_score = tm_matcher.should_bypass_llm(
                     seg.source, 
@@ -693,61 +695,67 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     bypass_segments.append(seg)
                     final_translations[seg.id] = apply_tm_to_segment(seg.source, tm_translation)
                     logger.log(f"[{seg.id}] BYPASS ({match_score:.0f}% TM match)")
+                    segment_matched = True
                 else:
                     llm_segments.append(seg)
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
-            # Check memoQ TMs if available
-            elif memoq_client and memoq_tm_guids:
+                    segment_matched = True
+            
+            # Check memoQ TMs if available (ONLY if local TM didn't match)
+            elif memoq_client and memoq_tm_guids and not segment_matched:
                 try:
                     for tm_guid in memoq_tm_guids:
+                        if segment_matched:  # Skip if already found match
+                            break
+                        
                         results = memoq_client.lookup_segments(tm_guid, [seg.source])
                         logger.log(f"memoQ lookup for {seg.id}: {results}")
                         
-                        if results and isinstance(results, dict):
-                            # Parse memoQ response structure
-                            result_list = results.get('Result', [])
+                        # Results are normalized: {0: [TMMatch objects]}
+                        if results and isinstance(results, dict) and 0 in results:
+                            tm_hits = results[0]  # List of TMMatch objects
                             
-                            if result_list and len(result_list) > 0:
-                                tm_hits = result_list[0].get('TMHits', [])
+                            if tm_hits:
+                                # Get the first match (TMMatch object from normalization)
+                                hit = tm_hits[0]
                                 
-                                if tm_hits:
-                                    # Get the first match
-                                    hit = tm_hits[0]
-                                    match_score = hit.get('MatchRate', 0)  # MatchRate not MatchScore
-                                    trans_unit = hit.get('TransUnit', {})
-                                    
-                                    # Extract target from <seg> tags
-                                    target_segment = trans_unit.get('TargetSegment', '')
-                                    if target_segment:
-                                        # Remove <seg></seg> tags
-                                        target_text = target_segment.replace('<seg>', '').replace('</seg>', '')
-                                    else:
-                                        target_text = seg.source
-                                    
-                                    logger.log(f"[{seg.id}] memoQ match score: {match_score}%")
-                                    
-                                    if match_score >= acceptance_threshold:
-                                        bypass_segments.append(seg)
-                                        final_translations[seg.id] = target_text
-                                        logger.log(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
-                                        break
-                                    elif match_score >= match_threshold:
-                                        llm_segments.append(seg)
-                                        tm_context[seg.id] = [{'MatchRate': match_score, 'TargetSegment': target_text}]
-                                        logger.log(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
-                                        break
-                                else:
+                                # Hit is a TMMatch object with attributes: source_text, target_text, similarity, match_type
+                                match_score = hit.similarity  # Use .similarity attribute, not dict key
+                                target_text = hit.target_text  # Use .target_text attribute
+                                
+                                logger.log(f"[{seg.id}] memoQ match score: {match_score}%")
+                                
+                                if match_score >= acceptance_threshold:
+                                    bypass_segments.append(seg)
+                                    final_translations[seg.id] = target_text
+                                    logger.log(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
+                                    segment_matched = True
+                                    break
+                                elif match_score >= match_threshold:
                                     llm_segments.append(seg)
+                                    tm_context[seg.id] = [{'similarity': match_score, 'target': target_text}]
+                                    logger.log(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
+                                    segment_matched = True
+                                    break
                             else:
-                                llm_segments.append(seg)
+                                # No hits in this TM
+                                if not segment_matched:
+                                    llm_segments.append(seg)
+                                    segment_matched = True
                         else:
-                            llm_segments.append(seg)
+                            # Bad response
+                            if not segment_matched:
+                                llm_segments.append(seg)
+                                segment_matched = True
                 except Exception as e:
                     logger.log(f"memoQ TM lookup error for {seg.id}: {str(e)}")
-                    llm_segments.append(seg)
-            else:
+                    if not segment_matched:
+                        llm_segments.append(seg)
+            
+            # If no TM matched, add to LLM
+            elif not segment_matched:
                 llm_segments.append(seg)
             
             if tb_matcher and seg in llm_segments:

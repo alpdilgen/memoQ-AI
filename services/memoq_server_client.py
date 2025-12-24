@@ -1,366 +1,591 @@
 """
-memoQ Server REST API Client
-Handles communication with memoQ Server for TM and TB operations
+memoQ Server API Client with complete TM and TB functionality
+Handles authentication, lookups, and normalization of responses
 """
 
 import requests
 import logging
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
-from enum import Enum
+import re
+from typing import List, Dict, Optional, Tuple, Any
+from requests.auth import HTTPBasicAuth
+from models.entities import TMMatch, TermMatch
 
 logger = logging.getLogger(__name__)
 
+
+# ===== NORMALIZATION FUNCTIONS =====
+
+def normalize_memoq_tm_response(memoq_response: Any, segment_id: str = "batch", match_threshold: int = 70) -> List[TMMatch]:
+    """
+    Convert memoQ Server TM API response to standard TMMatch objects
+    
+    Args:
+        memoq_response: Raw response from memoQ Server API
+        segment_id: ID of the segment being matched (for logging)
+        match_threshold: Minimum match % to include (0-100)
+    
+    Returns:
+        List of TMMatch objects, sorted by similarity descending
+    
+    Handles:
+        - Nested JSON structure from memoQ API
+        - XML tags in segments (<seg>text</seg>)
+        - Multiple matches per segment
+        - Match rate scoring
+    """
+    matches = []
+    
+    try:
+        # Handle different response structures
+        if isinstance(memoq_response, dict):
+            result_list = memoq_response.get('Result', [])
+        elif isinstance(memoq_response, list):
+            result_list = memoq_response
+        else:
+            logger.warning(f"Unexpected response type for {segment_id}: {type(memoq_response)}")
+            return []
+        
+        if not result_list:
+            return []
+        
+        # Extract TM hits from first result
+        if isinstance(result_list[0], dict):
+            tm_hits = result_list[0].get('TMHits', [])
+        else:
+            tm_hits = result_list
+        
+        if not tm_hits:
+            return []
+        
+        # Process each TM hit
+        for hit in tm_hits:
+            if not isinstance(hit, dict):
+                continue
+            
+            match_rate = hit.get('MatchRate', 0)
+            
+            # Skip if below threshold
+            if match_rate < match_threshold:
+                continue
+            
+            trans_unit = hit.get('TransUnit', {})
+            
+            if not trans_unit:
+                continue
+            
+            # Extract source and target segments
+            source_seg = trans_unit.get('SourceSegment', '')
+            target_seg = trans_unit.get('TargetSegment', '')
+            
+            if not source_seg or not target_seg:
+                continue
+            
+            # Clean XML tags: <seg>text</seg> → text
+            source_text = re.sub(r'</?seg>', '', source_seg).strip()
+            target_text = re.sub(r'</?seg>', '', target_seg).strip()
+            
+            # Skip empty matches
+            if not source_text or not target_text:
+                continue
+            
+            # Determine match type
+            match_type = "EXACT" if match_rate == 100 else "FUZZY"
+            
+            # Extract optional metadata
+            metadata = {}
+            custom_metas = trans_unit.get('CustomMetas', [])
+            for meta in custom_metas:
+                if isinstance(meta, dict):
+                    name = meta.get('Name', '')
+                    value = meta.get('Value', '')
+                    if name and value:
+                        metadata[name] = value
+            
+            # Create standard TMMatch object
+            try:
+                match = TMMatch(
+                    source_text=source_text,
+                    target_text=target_text,
+                    similarity=match_rate,
+                    match_type=match_type,
+                    project=metadata.get('Project'),
+                    domain=metadata.get('Domain'),
+                    metadata=metadata
+                )
+                
+                matches.append(match)
+                logger.debug(f"[{segment_id}] TM match: {match_rate}% - {source_text[:50]}")
+            
+            except ValueError as e:
+                logger.warning(f"[{segment_id}] Invalid TMMatch: {e}")
+                continue
+    
+    except Exception as e:
+        logger.error(f"Error normalizing memoQ TM response for {segment_id}: {e}", exc_info=True)
+        return []
+    
+    # Sort by similarity descending (best first)
+    matches.sort(key=lambda x: x.similarity, reverse=True)
+    
+    # Limit to top 10 to save tokens
+    return matches[:10]
+
+
+def normalize_memoq_tb_response(memoq_response: Any, segment_id: str = "batch") -> List[TermMatch]:
+    """
+    Convert memoQ Server TB API response to standard TermMatch objects
+    
+    Args:
+        memoq_response: Raw response from memoQ Server TB lookup
+        segment_id: ID of the segment being matched (for logging)
+    
+    Returns:
+        List of TermMatch objects
+    
+    Handles:
+        - Different TB response structures
+        - Term metadata (POS, definition, context)
+    """
+    terms = []
+    
+    try:
+        # Handle different response structures
+        if isinstance(memoq_response, dict):
+            result_list = memoq_response.get('Result', memoq_response.get('TermResults', []))
+        elif isinstance(memoq_response, list):
+            result_list = memoq_response
+        else:
+            return []
+        
+        if not result_list:
+            return []
+        
+        # Process TB results
+        for result in result_list:
+            if not isinstance(result, dict):
+                continue
+            
+            # Handle various field names
+            source_term = (
+                result.get('SourceTerm') or 
+                result.get('source_term') or 
+                result.get('Source') or
+                result.get('source', '')
+            )
+            
+            target_term = (
+                result.get('TargetTerm') or 
+                result.get('target_term') or 
+                result.get('Target') or
+                result.get('target', '')
+            )
+            
+            if not source_term or not target_term:
+                continue
+            
+            source_term = source_term.strip()
+            target_term = target_term.strip()
+            
+            # Create standard TermMatch object
+            try:
+                term = TermMatch(
+                    source=source_term,
+                    target=target_term,
+                    context=result.get('context') or result.get('Context'),
+                    part_of_speech=result.get('part_of_speech') or result.get('POS'),
+                    field=result.get('field') or result.get('Field'),
+                    definition=result.get('definition') or result.get('Definition')
+                )
+                
+                terms.append(term)
+                logger.debug(f"[{segment_id}] TB term: {source_term} = {target_term}")
+            
+            except ValueError as e:
+                logger.warning(f"[{segment_id}] Invalid TermMatch: {e}")
+                continue
+    
+    except Exception as e:
+        logger.error(f"Error normalizing memoQ TB response for {segment_id}: {e}", exc_info=True)
+        return []
+    
+    return terms
+
+
+# ===== MEMOQ SERVER CLIENT =====
+
 class MemoQServerClient:
     """
-    REST API client for memoQ Server
-    Handles Authentication, TM, and TB operations
+    Client for memoQ Server REST API v5
+    
+    Handles:
+    - Authentication (Basic Auth or Token)
+    - TM lookups with normalization
+    - TB (termbase) lookups
+    - Caching of TM/TB lists
+    - Error handling and logging
     """
     
-    def __init__(
-        self,
-        server_url: str,
-        username: str,
-        password: str,
-        verify_ssl: bool = False,
-        timeout: int = 30
-    ):
+    def __init__(self, 
+                 server_url: str, 
+                 username: str, 
+                 password: str = "",
+                 use_token: bool = False,
+                 timeout: int = 30,
+                 verify_ssl: bool = True):
         """
-        Initialize memoQ Server connection
+        Initialize memoQ Server client
         
         Args:
-            server_url: Base URL (e.g., https://mirage.memoq.com:9091/adaturkey)
-            username: memoQ username
-            password: memoQ password
-            verify_ssl: SSL certificate verification
-            timeout: Request timeout
+            server_url: Base URL of memoQ Server (e.g., http://localhost:8080)
+            username: Username or API token
+            password: Password (empty if using token)
+            use_token: If True, username is treated as API token
+            timeout: Request timeout in seconds
+            verify_ssl: Whether to verify SSL certificates
         """
         self.server_url = server_url.rstrip('/')
-        self.username = username
-        self.password = password
-        self.verify_ssl = verify_ssl
         self.timeout = timeout
-        self.base_path = "/memoqserverhttpapi/v1"
+        self.verify_ssl = verify_ssl
         
-        self.token = None
-        self.token_expiry = None
-        self.token_buffer = 300  # 5 min buffer
+        # Create session with authentication
+        self.session = requests.Session()
         
-        self._tm_cache = {}
-        self._tb_cache = {}
+        if use_token:
+            self.session.headers['Authorization'] = f'Bearer {username}'
+            logger.info("memoQ Client: Using token authentication")
+        else:
+            self.session.auth = HTTPBasicAuth(username, password)
+            logger.info("memoQ Client: Using basic authentication")
+        
+        # Set common headers
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        })
+        
+        # Caches
+        self._tm_cache: Dict[str, List] = {}
+        self._tb_cache: Dict[str, List] = {}
+        
+        logger.info(f"MemoQServerClient initialized: {self.server_url}")
     
-    def login(self) -> bool:
-        """Authenticate with memoQ Server"""
-        url = f"{self.server_url}{self.base_path}/auth/login"
-        payload = {
-            "UserName": self.username,
-            "Password": self.password,
-            "LoginMode": 0
-        }
+    def _make_request(self, 
+                      method: str, 
+                      endpoint: str, 
+                      params: Optional[Dict] = None, 
+                      body: Optional[Dict] = None,
+                      timeout: Optional[int] = None) -> Dict:
+        """
+        Make HTTP request to memoQ Server
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            endpoint: API endpoint (e.g., /tms)
+            params: Query parameters
+            body: JSON body for POST/PUT
+            timeout: Request timeout
+        
+        Returns:
+            Response JSON
+        
+        Raises:
+            Exception: On network or API errors
+        """
+        url = f"{self.server_url}/api/v5{endpoint}"
+        req_timeout = timeout or self.timeout
         
         try:
-            response = requests.post(
-                url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                verify=self.verify_ssl,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
+            logger.debug(f"{method} {url}")
             
-            data = response.json()
-            self.token = data.get("AccessToken")
-            self.token_expiry = datetime.now() + timedelta(minutes=55)
-            
-            logger.info(f"✓ Authenticated as {data.get('Name')}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Login failed: {e}")
-            raise Exception(f"Authentication failed: {str(e)}")
-    
-    def _ensure_token(self) -> bool:
-        """Ensure token is valid"""
-        if self.token is None:
-            return self.login()
-        
-        if datetime.now() > (self.token_expiry - timedelta(seconds=self.token_buffer)):
-            logger.warning("Token expiring, refreshing...")
-            return self.login()
-        
-        return True
-    
-    def _make_request(
-        self,
-        method: str,
-        endpoint: str,
-        data: Optional[Dict] = None,
-        params: Optional[Dict] = None
-    ) -> Dict:
-        """Make REST API request"""
-        if not self._ensure_token():
-            raise Exception("Authentication failed")
-        
-        url = f"{self.server_url}{self.base_path}{endpoint}"
-        
-        request_params = {"authToken": self.token}
-        if params:
-            request_params.update(params)
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
-        try:
             if method == "GET":
-                response = requests.get(
-                    url,
-                    params=request_params,
-                    headers=headers,
-                    verify=self.verify_ssl,
-                    timeout=self.timeout
+                response = self.session.get(
+                    url, 
+                    params=params, 
+                    timeout=req_timeout,
+                    verify=self.verify_ssl
                 )
+            
             elif method == "POST":
-                logger.debug(f"POST URL: {url}")
-                logger.debug(f"POST Params: {request_params}")
-                logger.debug(f"POST Data: {data}")
-                response = requests.post(
-                    url,
-                    json=data,
-                    params=request_params,
-                    headers=headers,
-                    verify=self.verify_ssl,
-                    timeout=self.timeout
+                response = self.session.post(
+                    url, 
+                    json=body, 
+                    params=params, 
+                    timeout=req_timeout,
+                    verify=self.verify_ssl
                 )
+            
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
-            logger.debug(f"Response Status: {response.status_code}")
-            logger.debug(f"Response Text: {response.text}")
-            
             response.raise_for_status()
-            result = response.json()
-            logger.debug(f"Response JSON: {result}")
-            return result
             
+            result = response.json()
+            logger.debug(f"Response: {len(str(result))} chars")
+            return result
+        
+        except requests.exceptions.Timeout:
+            error_msg = f"Request timeout: {url}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"Connection error: {url} - {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
         except requests.exceptions.HTTPError as e:
-            try:
-                error_data = response.json()
-                error_code = error_data.get("ErrorCode", "Unknown")
-                error_msg = error_data.get("Message", "")
-                raise Exception(f"HTTP {response.status_code}: {error_code}: {error_msg}")
-            except:
-                raise Exception(f"HTTP {response.status_code}: {str(e)}")
+            error_msg = f"HTTP {response.status_code}: {url} - {response.text[:200]}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
         
         except Exception as e:
-            logger.error(f"Request failed: {str(e)}")
-            raise Exception(f"Request failed: {str(e)}")
+            error_msg = f"Request failed: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
     
-    # ==================== TRANSLATION MEMORY ====================
-    
-    def list_tms(
-        self,
-        src_lang: Optional[str] = None,
-        tgt_lang: Optional[str] = None,
-        force_refresh: bool = False
-    ) -> List[Dict]:
-        """List all Translation Memories"""
-        cache_key = f"tms_{src_lang}_{tgt_lang}"
+    def test_connection(self) -> bool:
+        """
+        Test connection to memoQ Server
         
+        Returns:
+            True if connection successful, False otherwise
+        """
+        try:
+            result = self._make_request("GET", "/status")
+            logger.info(f"✓ memoQ Server connection successful")
+            return True
+        
+        except Exception as e:
+            logger.error(f"✗ memoQ Server connection failed: {e}")
+            return False
+    
+    def list_tms(self, 
+                 src_lang: Optional[str] = None, 
+                 tgt_lang: Optional[str] = None,
+                 force_refresh: bool = False) -> List[Dict]:
+        """
+        List all Translation Memories
+        
+        Args:
+            src_lang: Filter by source language code (optional)
+            tgt_lang: Filter by target language code (optional)
+            force_refresh: Ignore cache and fetch fresh
+        
+        Returns:
+            List of TM objects with metadata
+        """
+        # Check cache
+        cache_key = f"tms_{src_lang}_{tgt_lang}"
         if not force_refresh and cache_key in self._tm_cache:
+            logger.debug(f"Using cached TMs: {cache_key}")
             return self._tm_cache[cache_key]
         
-        endpoint = "/tms"
         params = {}
-        
         if src_lang:
-            params["srcLang"] = src_lang
+            params['srcLang'] = src_lang
         if tgt_lang:
-            params["targetLang"] = tgt_lang
+            params['tgtLang'] = tgt_lang
         
-        result = self._make_request("GET", endpoint, params=params if params else None)
-        self._tm_cache[cache_key] = result
+        try:
+            result = self._make_request("GET", "/tms", params=params if params else None)
+            
+            # Cache result
+            tm_list = result if isinstance(result, list) else result.get('TMs', [])
+            self._tm_cache[cache_key] = tm_list
+            
+            logger.info(f"Listed {len(tm_list)} TMs (cache: {cache_key})")
+            return tm_list
         
-        logger.info(f"Listed {len(result)} TMs")
-        return result
+        except Exception as e:
+            logger.error(f"Failed to list TMs: {e}")
+            return []
     
-    def lookup_segments(
-        self,
-        tm_guid: str,
-        segments: List[str],
-        match_threshold: int = 70
-    ) -> Dict:
+    def list_termbases(self,
+                       src_lang: Optional[str] = None,
+                       tgt_lang: Optional[str] = None,
+                       force_refresh: bool = False) -> List[Dict]:
         """
-        Lookup segments in Translation Memory
+        List all Termbases
+        
+        Args:
+            src_lang: Filter by source language
+            tgt_lang: Filter by target language
+            force_refresh: Ignore cache and fetch fresh
+        
+        Returns:
+            List of termbase objects with metadata
+        """
+        # Check cache
+        cache_key = f"tbs_{src_lang}_{tgt_lang}"
+        if not force_refresh and cache_key in self._tb_cache:
+            logger.debug(f"Using cached termbases: {cache_key}")
+            return self._tb_cache[cache_key]
+        
+        params = {}
+        if src_lang:
+            params['srcLang'] = src_lang
+        if tgt_lang:
+            params['tgtLang'] = tgt_lang
+        
+        try:
+            result = self._make_request("GET", "/termbases", params=params if params else None)
+            
+            # Cache result
+            tb_list = result if isinstance(result, list) else result.get('TBs', [])
+            self._tb_cache[cache_key] = tb_list
+            
+            logger.info(f"Listed {len(tb_list)} termbases (cache: {cache_key})")
+            return tb_list
+        
+        except Exception as e:
+            logger.error(f"Failed to list termbases: {e}")
+            return []
+    
+    def lookup_segments(self,
+                        tm_guid: str,
+                        segments: List[str],
+                        match_threshold: int = 70) -> Dict[int, List[TMMatch]]:
+        """
+        Lookup segments in Translation Memory with normalization
         
         Args:
             tm_guid: Translation Memory GUID
-            segments: List of source segments to lookup
-            match_threshold: Minimum match percentage (50-102)
+            segments: List of source text segments
+            match_threshold: Minimum match % to include (0-100)
         
         Returns:
-            API response with matches
+            Dict: {segment_index: [TMMatch objects]}
+                  Returns empty dict if no matches or error
+        
+        Handles:
+            - Multiple segments per request
+            - Normalization of response
+            - Error recovery
         """
-        # Clean segments: remove XML tag placeholders {{1}}, {{2}}, etc.
-        cleaned_segments = []
+        if not segments:
+            return {}
+        
+        # Clean segments: remove placeholder tags {{1}}, etc.
+        clean_segments = []
         for seg in segments:
-            clean_text = seg.replace('{{', '').replace('}}', '')
-            # Remove digits that were part of placeholders
-            parts = clean_text.split()
-            clean_text = ' '.join(p for p in parts if p.strip())
-            cleaned_segments.append(clean_text.strip())
+            # Remove XML-style tags
+            clean_seg = re.sub(r'\{\{[\d]+\}\}', '', seg).strip()
+            # Remove extra whitespace
+            clean_seg = re.sub(r'\s+', ' ', clean_seg)
+            if clean_seg:
+                clean_segments.append(clean_seg)
         
-        # Build correct payload according to memoQ API v1 documentation
-        # IMPORTANT: Segments must be wrapped in <seg> XML tags
-        payload = {
-            "Segments": [
-                {"Segment": f"<seg>{seg}</seg>"}
-                for seg in cleaned_segments
-            ],
-            "Options": {
-                "MatchThreshold": match_threshold,
-                "AdjustFuzzyMatches": False,
-                "InlineTagStrictness": 2,
-                "OnlyBest": False,
-                "OnlyUnambiguous": False,
-                "ShowFragmentHits": False,
-                "ReverseLookup": False
-            }
-        }
-        
-        endpoint = f"/tms/{tm_guid}/lookupsegments"
+        if not clean_segments:
+            return {}
         
         try:
-            logger.debug(f"TM lookup payload: {payload}")
-            result = self._make_request("POST", endpoint, data=payload)
-            logger.info(f"TM lookup raw response: {result}")
+            logger.info(f"TM lookup: {len(clean_segments)} segments in {tm_guid}")
             
-            # Check if result has hits
-            if result and isinstance(result, dict):
-                result_list = result.get("Result", [])
-                logger.info(f"TM lookup Result count: {len(result_list) if result_list else 0}")
-                
-                if result_list:
-                    for i, segment_result in enumerate(result_list):
-                        hits = segment_result.get("TMHits", [])
-                        logger.info(f"Segment {i+1} TM hits: {len(hits)}")
-                    return result
-                else:
-                    logger.warning(f"TM lookup returned Result but empty")
-                    return {}
-            else:
-                logger.warning(f"TM lookup returned unexpected format: {result}")
-                return {}
+            # Prepare request body
+            body = {
+                "lookupSegmentBatch": clean_segments,
+                "penaltyForContextMismatch": 1,
+                "numberOfSearchResults": 5  # Return top 5 matches per segment
+            }
+            
+            # Make API request
+            results = self._make_request(
+                "POST",
+                f"/tms/{tm_guid}/concord",
+                body=body
+            )
+            
+            # Normalize responses for each segment
+            normalized_results = {}
+            
+            if isinstance(results, dict) and 'Result' in results:
+                # Single result with all hits
+                normalized = normalize_memoq_tm_response(
+                    results,
+                    segment_id="batch",
+                    match_threshold=match_threshold
+                )
+                if normalized:
+                    for idx in range(len(clean_segments)):
+                        normalized_results[idx] = normalized
+            
+            elif isinstance(results, list):
+                # List of results per segment
+                for idx, result in enumerate(results):
+                    if idx < len(clean_segments):
+                        normalized = normalize_memoq_tm_response(
+                            result,
+                            segment_id=str(idx),
+                            match_threshold=match_threshold
+                        )
+                        if normalized:
+                            normalized_results[idx] = normalized
+            
+            logger.info(f"TM lookup complete: {len(normalized_results)} segments with matches")
+            return normalized_results
+        
         except Exception as e:
-            logger.error(f"TM lookup error: {e}", exc_info=True)
+            logger.error(f"TM lookup failed: {e}", exc_info=True)
             return {}
     
-    def concordance_search(
-        self,
-        tm_guid: str,
-        search_terms: List[str],
-        results_limit: int = 64
-    ) -> Dict:
-        """Concordance search in Translation Memory"""
-        payload = {
-            "SearchExpression": search_terms,
-            "Options": {
-                "ResultsLimit": results_limit,
-                "Ascending": False,
-                "Column": 3
-            }
-        }
-        
-        endpoint = f"/tms/{tm_guid}/concordance"
-        return self._make_request("POST", endpoint, data=payload)
-    
-    # ==================== TERMBASE ====================
-    
-    def list_tbs(
-        self,
-        languages: Optional[List[str]] = None,
-        force_refresh: bool = False
-    ) -> List[Dict]:
-        """List all Termbases"""
-        cache_key = f"tbs_{'_'.join(languages or [])}"
-        
-        if not force_refresh and cache_key in self._tb_cache:
-            return self._tb_cache[cache_key]
-        
-        endpoint = "/tbs"
-        params = None
-        
-        if languages:
-            params = {f"lang[{i}]": lang for i, lang in enumerate(languages)}
-        
-        result = self._make_request("GET", endpoint, params=params)
-        self._tb_cache[cache_key] = result
-        
-        logger.info(f"Listed {len(result)} TBs")
-        return result
-    
-    def lookup_terms(
-        self,
-        tb_guid: str,
-        search_terms: List[str],
-        src_lang: str = "eng",
-        tgt_lang: Optional[str] = "tur"
-    ) -> Dict:
+    def lookup_terms(self,
+                     tb_guid: str,
+                     term_candidates: List[str]) -> List[TermMatch]:
         """
         Lookup terms in Termbase
         
         Args:
             tb_guid: Termbase GUID
-            search_terms: List of terms to lookup
-            src_lang: Source language code (default: "eng" for English)
-            tgt_lang: Target language code (optional, default: "tur" for Turkish)
+            term_candidates: List of terms to lookup
         
         Returns:
-            API response with matching terms
+            List[TermMatch]: Matching terms with normalization applied
+        
+        Handles:
+            - Multiple term lookups
+            - Normalization of response
+            - Error recovery
         """
-        # Clean search terms: remove XML tag placeholders
-        cleaned_terms = []
-        for term in search_terms:
-            clean_text = term.replace('{{', '').replace('}}', '')
-            parts = clean_text.split()
-            clean_text = ' '.join(p for p in parts if p.strip())
-            cleaned_terms.append(clean_text.strip())
-        
-        # Build correct payload according to memoQ API v1 documentation
-        # IMPORTANT: Segments must be wrapped in <seg> XML tags
-        payload = {
-            "SourceLanguage": src_lang,
-            "Segments": [f"<seg>{term}</seg>" for term in cleaned_terms]
-        }
-        
-        # Add target language if specified
-        if tgt_lang:
-            payload["TargetLanguage"] = tgt_lang
-        
-        endpoint = f"/tbs/{tb_guid}/lookupterms"
+        if not term_candidates:
+            return []
         
         try:
-            logger.debug(f"TB lookup payload: {payload}")
-            result = self._make_request("POST", endpoint, data=payload)
-            logger.info(f"TB lookup raw response: {result}")
+            logger.info(f"TB lookup: {len(term_candidates)} terms in {tb_guid}")
             
-            # Check if result has hits
-            if result and isinstance(result, dict):
-                result_list = result.get("Result", [])
-                logger.info(f"TB lookup Result count: {len(result_list) if result_list else 0}")
-                
-                if result_list:
-                    for i, segment_result in enumerate(result_list):
-                        hits = segment_result.get("TBHits", [])
-                        logger.info(f"Segment {i+1} TB hits: {len(hits)}")
-                    return result
-                else:
-                    logger.warning(f"TB lookup returned Result but empty")
-                    return {}
-            else:
-                logger.warning(f"TB lookup returned unexpected format: {result}")
-                return {}
+            # Prepare request
+            body = {
+                "lookupItems": term_candidates,
+                "numberOfSearchResults": 3  # Top 3 results per term
+            }
+            
+            # Make API request
+            results = self._make_request(
+                "POST",
+                f"/termbases/{tb_guid}/lookup",
+                body=body
+            )
+            
+            # Normalize TB response
+            normalized = normalize_memoq_tb_response(results, segment_id="batch")
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_terms = []
+            for term in normalized:
+                key = (term.source, term.target)
+                if key not in seen:
+                    seen.add(key)
+                    unique_terms.append(term)
+            
+            logger.info(f"TB lookup complete: {len(unique_terms)} unique terms found")
+            return unique_terms
+        
         except Exception as e:
-            logger.error(f"TB lookup error: {e}", exc_info=True)
-            return {}
+            logger.error(f"TB lookup failed: {e}", exc_info=True)
+            return []
+    
+    def clear_cache(self):
+        """Clear all cached TM and TB lists"""
+        self._tm_cache.clear()
+        self._tb_cache.clear()
+        logger.info("memoQ client cache cleared")

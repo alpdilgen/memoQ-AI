@@ -1,64 +1,110 @@
 """
-STREAMLIT APPLICATION - Updated key sections for memoQ Server integration
-
-This file contains the UPDATED SECTIONS that need to be integrated into your existing app.py
-Copy these sections and replace the corresponding sections in your app.py
-
-Key areas updated:
-1. Imports
-2. Helper functions for memoQ context collection
-3. Main process_translation function
-4. Logging enhancements
+Complete app.py - Full Streamlit Application
+With memoQ Server integration, TM/TB context, DNT support
 """
 
-# ===== IMPORTS SECTION (ADD TO TOP OF APP.PY) =====
 import streamlit as st
 import logging
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+import sys
+import os
+import traceback
 import re
+import json
 
-# Import updated models and services
-from models.entities import (
-    TranslationSegment, TMMatch, TermMatch, 
-    BatchResult, TranslationMetadata, SegmentAnalysis
-)
-from services.memoq_server_client import (
-    MemoQServerClient,
-    normalize_memoq_tm_response,
-    normalize_memoq_tb_response
-)
-from services.prompt_builder import PromptBuilder
-# ... other existing imports ...
+# ===== PATH CONFIGURATION =====
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# ===== IMPORTS WITH ERROR HANDLING =====
+try:
+    from models.entities import (
+        TranslationSegment, 
+        TMMatch, 
+        TermMatch,
+        BatchResult,
+        TranslationMetadata
+    )
+except ImportError as e:
+    st.error(f"❌ Import Error: models.entities\n\nMake sure you have:\n1. `models/` directory\n2. `models/__init__.py`\n3. `models/entities.py`\n\nError: {e}")
+    raise
+
+try:
+    from services.memoq_server_client import (
+        MemoQServerClient,
+        normalize_memoq_tm_response,
+        normalize_memoq_tb_response
+    )
+except ImportError as e:
+    st.error(f"❌ Import Error: services.memoq_server_client\n\nError: {e}")
+    raise
+
+try:
+    from services.prompt_builder import PromptBuilder
+except ImportError as e:
+    st.error(f"❌ Import Error: services.prompt_builder\n\nError: {e}")
+    raise
+
+# ===== LOGGING CONFIGURATION =====
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(name)s | %(levelname)s: %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# ===== PAGE CONFIGURATION =====
+st.set_page_config(
+    page_title="memoQ AI Translator",
+    page_icon="🌐",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ===== HELPER FUNCTIONS (ADD TO APP.PY) =====
+# ===== SESSION STATE INITIALIZATION =====
+def init_session_state():
+    """Initialize Streamlit session state"""
+    defaults = {
+        'api_key': '',
+        'source_lang': 'English',
+        'target_lang': 'Turkish',
+        'acceptance_threshold': 95,
+        'match_threshold': 70,
+        'segment_objects': {},
+        'translation_results': {},
+        'chat_history': [],
+        'dnt_terms': [],
+        'reference_chunks': [],
+        'bypass_stats': {'bypassed': 0, 'llm_sent': 0},
+        'memoq_server_url': '',
+        'memoq_username': '',
+        'memoq_password': '',
+        'selected_tm_guids': [],
+        'selected_tb_guids': [],
+        'memoq_client': None,
+        'use_generated_prompt': False,
+        'generated_prompt': '',
+        'translation_log': '',
+        'match_rates': {}
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+init_session_state()
+
+# ===== HELPER FUNCTIONS =====
 
 def get_memoq_tm_context(memoq_client: MemoQServerClient,
                          tm_guids: List[str],
                          segment: TranslationSegment,
                          match_threshold: int = 70) -> List[TMMatch]:
-    """
-    Get TM context from memoQ Server for a segment
-    Returns normalized TMMatch objects
-    
-    Args:
-        memoq_client: MemoQServerClient instance
-        tm_guids: List of TM GUIDs to search
-        segment: TranslationSegment object
-        match_threshold: Minimum match % to include
-    
-    Returns:
-        List of TMMatch objects sorted by similarity (best first)
-    """
+    """Get TM context from memoQ Server"""
     for tm_guid in tm_guids:
         try:
-            # Lookup returns already-normalized TMMatch objects
             results = memoq_client.lookup_segments(
                 tm_guid,
                 [segment.source],
@@ -69,43 +115,27 @@ def get_memoq_tm_context(memoq_client: MemoQServerClient,
                 matches = results[0]
                 if matches:
                     logger.info(
-                        f"[{segment.id}] memoQ TM: {len(matches)} fuzzy matches (threshold ≥{match_threshold}%)"
+                        f"[{segment.id}] memoQ TM: {len(matches)} fuzzy matches"
                     )
-                    # Log top 3 matches
                     for match in matches[:3]:
                         logger.info(
-                            f"  [{match.similarity}%] {match.source_text[:50]}... "
-                            f"→ {match.target_text[:50]}..."
+                            f"  [{match.similarity}%] {match.source_text[:50]}"
                         )
                     return matches
         
         except Exception as e:
-            logger.warning(f"memoQ TM lookup failed for segment {segment.id}: {e}")
+            logger.warning(f"memoQ TM lookup failed for {segment.id}: {e}")
             continue
     
-    logger.info(f"[{segment.id}] No memoQ TM matches found (threshold ≥{match_threshold}%)")
     return []
 
 
 def get_memoq_tb_context(memoq_client: MemoQServerClient,
                          tb_guids: List[str],
                          segment: TranslationSegment) -> List[TermMatch]:
-    """
-    Get TB context from memoQ Server for a segment
-    Returns normalized TermMatch objects
-    
-    Args:
-        memoq_client: MemoQServerClient instance
-        tb_guids: List of TB GUIDs to search
-        segment: TranslationSegment object
-    
-    Returns:
-        List of TermMatch objects
-    """
+    """Get TB context from memoQ Server"""
     for tb_guid in tb_guids:
         try:
-            # Extract potential terms from segment
-            # Simple approach: words > 3 chars
             potential_terms = [
                 word for word in segment.source.split()
                 if len(word) > 3 and word.replace('.', '').isalpha()
@@ -114,20 +144,18 @@ def get_memoq_tb_context(memoq_client: MemoQServerClient,
             if not potential_terms:
                 continue
             
-            # Lookup returns already-normalized TermMatch objects
             matches = memoq_client.lookup_terms(tb_guid, potential_terms)
             
             if matches:
-                logger.info(f"[{segment.id}] memoQ TB: {len(matches)} terms found")
+                logger.info(f"[{segment.id}] memoQ TB: {len(matches)} terms")
                 for term in matches[:3]:
                     logger.info(f"  {term.source} = {term.target}")
                 return matches
         
         except Exception as e:
-            logger.warning(f"memoQ TB lookup failed for segment {segment.id}: {e}")
+            logger.warning(f"memoQ TB lookup failed for {segment.id}: {e}")
             continue
     
-    logger.info(f"[{segment.id}] No memoQ TB terms found")
     return []
 
 
@@ -136,70 +164,31 @@ def log_batch_context(batch_num: int,
                       tm_context: Dict[str, List],
                       tb_context: Dict[str, List],
                       dnt_context: Dict[str, List]):
-    """
-    Log detailed context information for a batch before sending to LLM
-    
-    Args:
-        batch_num: Batch number
-        segments: List of segments in batch
-        tm_context: {segment_id: [TMMatch objects]}
-        tb_context: {segment_id: [TermMatch objects]}
-        dnt_context: {segment_id: [DNT terms]}
-    """
+    """Log batch context details"""
     logger.info(f"\n{'='*80}")
     logger.info(f"=== BATCH {batch_num} ===")
-    logger.info(f"Segments in batch: {len(segments)}")
+    logger.info(f"Segments: {len(segments)}")
     
-    # TM Summary
-    tm_segments_with_context = len([c for c in tm_context.values() if c])
-    tm_total_matches = sum(len(c) for c in tm_context.values() if c)
-    logger.info(f"TM Context: {tm_total_matches} matches across {tm_segments_with_context} segments")
+    tm_segments = len([c for c in tm_context.values() if c])
+    tm_total = sum(len(c) for c in tm_context.values() if c)
+    logger.info(f"TM Context: {tm_total} matches across {tm_segments} segments")
     
-    # TB Summary
-    tb_segments_with_context = len([c for c in tb_context.values() if c])
-    tb_total_terms = sum(len(c) for c in tb_context.values() if c)
-    logger.info(f"TB Context: {tb_total_terms} terms across {tb_segments_with_context} segments")
+    tb_segments = len([c for c in tb_context.values() if c])
+    tb_total = sum(len(c) for c in tb_context.values() if c)
+    logger.info(f"TB Context: {tb_total} terms across {tb_segments} segments")
     
-    # DNT Summary
-    dnt_segments_with_terms = len([c for c in dnt_context.values() if c])
+    dnt_segments = len([c for c in dnt_context.values() if c])
     dnt_total = sum(len(c) for c in dnt_context.values() if c)
-    logger.info(f"DNT Check: {dnt_total} forbidden terms in {dnt_segments_with_terms} segments")
+    logger.info(f"DNT Check: {dnt_total} terms in {dnt_segments} segments")
     
     logger.info(f"{'='*80}\n")
-
-
-def log_prompt_details(batch_num: int, prompt: str):
-    """Log prompt details"""
-    tm_lines = len([l for l in prompt.split('\n') if '[FUZZY' in l or '[EXACT' in l])
-    tb_lines = len([l for l in prompt.split('\n') if '=' in l and l.count('=') == 1 and '-' in l])
-    
-    logger.info(f">>> PROMPT SENT TO LLM (Batch {batch_num}) >>>")
-    logger.info(f"Prompt size: {len(prompt)} characters")
-    logger.info(f"TM context lines: {tm_lines}")
-    logger.info(f"TB context lines: {tb_lines}")
-    logger.info(">>> END PROMPT >>>")
 
 
 def process_single_segment(segment: TranslationSegment,
                            memoq_client: Optional[MemoQServerClient],
                            memoq_tm_guids: Optional[List[str]],
-                           memoq_tb_guids: Optional[List[str]],
-                           acceptance_threshold: int = 95,
-                           match_threshold: int = 70) -> Tuple[bool, Dict, str]:
-    """
-    Process a single segment for TM matching and context collection
-    
-    Args:
-        segment: TranslationSegment to process
-        memoq_client: memoQ Server client instance
-        memoq_tm_guids: List of TM GUIDs
-        memoq_tb_guids: List of TB GUIDs
-        acceptance_threshold: % threshold to bypass LLM
-        match_threshold: % threshold for context inclusion
-    
-    Returns:
-        Tuple of (should_bypass, final_translations_dict, log_message)
-    """
+                           acceptance_threshold: int = 95) -> Tuple[bool, Dict, str]:
+    """Process single segment for TM matching"""
     result_translation = {}
     should_bypass = False
     log_msg = ""
@@ -207,10 +196,8 @@ def process_single_segment(segment: TranslationSegment,
     if not memoq_client or not memoq_tm_guids:
         return should_bypass, result_translation, "No memoQ TM available"
     
-    # Check for 100% match in memoQ
     try:
         for tm_guid in memoq_tm_guids:
-            # Lookup with high threshold to find near-perfect matches
             results = memoq_client.lookup_segments(
                 tm_guid,
                 [segment.source],
@@ -223,123 +210,190 @@ def process_single_segment(segment: TranslationSegment,
                     first_match = matches[0]
                     match_score = first_match.similarity
                     
-                    # If meets bypass threshold, use it
                     if match_score >= acceptance_threshold:
                         should_bypass = True
                         result_translation[segment.id] = first_match.target_text
-                        log_msg = f"[{segment.id}] memoQ match: {match_score}% - BYPASS"
-                        logger.info(f"{log_msg}")
+                        log_msg = f"[{segment.id}] memoQ: {match_score}% - BYPASS"
+                        logger.info(log_msg)
                         logger.info(
-                            f"  {first_match.source_text[:60]}... "
-                            f"→ {first_match.target_text[:60]}..."
+                            f"  {first_match.source_text[:60]} → {first_match.target_text[:60]}"
                         )
                         return should_bypass, result_translation, log_msg
-                    
-                    else:
-                        # Below threshold, but log for reference
-                        log_msg = f"[{segment.id}] memoQ match: {match_score}% (below {acceptance_threshold}%)"
-                        logger.info(log_msg)
     
     except Exception as e:
         logger.warning(f"[{segment.id}] memoQ lookup error: {e}")
     
     if not should_bypass:
-        log_msg = f"[{segment.id}] No memoQ match ≥{acceptance_threshold}% - needs LLM"
+        log_msg = f"[{segment.id}] No memoQ match ≥{acceptance_threshold}%"
     
     return should_bypass, result_translation, log_msg
 
 
-# ===== MAIN PROCESS_TRANSLATION FUNCTION (UPDATED SECTIONS) =====
-# This shows the key updated sections of process_translation
+# ===== MAIN APPLICATION =====
 
-def process_translation(xliff_file,
-                        tmx_bytes=None,
-                        csv_bytes=None,
-                        custom_prompt_content=None,
-                        memoq_tm_guids=None,
-                        memoq_tb_guids=None):
-    """
-    Main translation processing function
-    Handles TM matching, batch processing, and LLM translation
+def main():
+    """Main Streamlit application"""
     
-    UPDATED: Full memoQ Server integration with context collection
+    st.title("🌐 memoQ AI Translator")
+    st.markdown("Powered by memoQ Server & GPT-4")
     
-    Args:
-        xliff_file: XLIFF file object
-        tmx_bytes: Optional local TMX file bytes
-        csv_bytes: Optional local CSV termbase bytes
-        custom_prompt_content: Optional custom prompt template
-        memoq_tm_guids: List of memoQ TM GUIDs
-        memoq_tb_guids: List of memoQ TB GUIDs
-    """
+    # ===== SIDEBAR CONFIGURATION =====
+    with st.sidebar:
+        st.header("⚙️ Settings")
+        
+        # API Key
+        api_key = st.text_input("OpenAI API Key", type="password", value=st.session_state.api_key)
+        st.session_state.api_key = api_key
+        
+        # Language Selection
+        col1, col2 = st.columns(2)
+        with col1:
+            source_lang = st.selectbox("Source Language", ["English", "German", "French", "Spanish"])
+            st.session_state.source_lang = source_lang
+        with col2:
+            target_lang = st.selectbox("Target Language", ["Turkish", "German", "French", "Spanish", "Italian"])
+            st.session_state.target_lang = target_lang
+        
+        # Thresholds
+        st.subheader("Match Thresholds")
+        acceptance = st.slider("TM Acceptance (bypass LLM)", 70, 100, st.session_state.acceptance_threshold)
+        st.session_state.acceptance_threshold = acceptance
+        
+        match_thresh = st.slider("TM Context (send to LLM)", 0, acceptance-1, st.session_state.match_threshold)
+        st.session_state.match_threshold = match_thresh
+        
+        # memoQ Server Configuration
+        st.subheader("memoQ Server")
+        memoq_url = st.text_input("Server URL", value=st.session_state.memoq_server_url, placeholder="http://localhost:8080")
+        st.session_state.memoq_server_url = memoq_url
+        
+        memoq_user = st.text_input("Username", value=st.session_state.memoq_username)
+        st.session_state.memoq_username = memoq_user
+        
+        memoq_pass = st.text_input("Password", type="password", value=st.session_state.memoq_password)
+        st.session_state.memoq_password = memoq_pass
+        
+        # DNT List
+        st.subheader("Do Not Translate (DNT)")
+        dnt_text = st.text_area("Terms to keep in original (one per line)", height=100)
+        st.session_state.dnt_terms = [t.strip() for t in dnt_text.split('\n') if t.strip()]
     
-    if not st.session_state.api_key:
-        st.error("❌ Please provide an API Key in settings.")
-        return
+    # ===== MAIN CONTENT AREA =====
     
-    with st.status("Processing translation...", expanded=True) as status:
+    # File Upload
+    st.header("📤 Upload Translation File")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        xliff_file = st.file_uploader("XLIFF File", type=['xliff', 'xml'])
+    
+    with col2:
+        tmx_file = st.file_uploader("Translation Memory (TMX)", type=['tmx'])
+    
+    with col3:
+        csv_file = st.file_uploader("Termbase (CSV)", type=['csv'])
+    
+    if xliff_file:
+        st.success(f"✅ Loaded: {xliff_file.name}")
         
-        # ===== PHASE 1: PARSE XLIFF =====
-        st.write("📄 Parsing XLIFF file...")
-        segments = []  # This should come from your XML parser
-        # segments = XMLParser.parse_xliff(xliff_file.getvalue())
-        
-        st.write(f"✅ Loaded {len(segments)} segments")
-        logger.info(f"Loaded {len(segments)} segments from XLIFF")
-        
-        # Initialize session state
-        st.session_state.segment_objects = {seg.id: seg for seg in segments}
-        st.session_state.chat_history = []
-        
-        # Create transaction logger
-        logger.info(f"Started translation job for {len(segments)} segments.")
-        logger.info(f"Source: {st.session_state.source_lang} | Target: {st.session_state.target_lang}")
-        logger.info(f"TM Acceptance: ≥{st.session_state.acceptance_threshold}%")
-        logger.info(f"TM Match (context): ≥{st.session_state.match_threshold}%")
-        
-        # ===== PHASE 2: INITIALIZE memoQ SERVER CLIENT =====
-        memoq_client = None
-        
-        if memoq_tm_guids or memoq_tb_guids:
-            st.write("🔗 Connecting to memoQ Server...")
+        # Start Translation
+        if st.button("🚀 Start Translation", type="primary"):
+            if not api_key:
+                st.error("❌ Please provide API Key")
+                return
+            
+            xliff_bytes = xliff_file.getvalue()
+            tmx_bytes = tmx_file.getvalue() if tmx_file else None
+            csv_bytes = csv_file.getvalue() if csv_file else None
             
             try:
-                if st.session_state.get('memoq_client'):
-                    memoq_client = st.session_state.memoq_client
-                    
-                    # Test connection
-                    if memoq_client.test_connection():
-                        st.write("✅ Connected to memoQ Server")
-                        
-                        if memoq_tm_guids:
-                            st.write(f"   • {len(memoq_tm_guids)} Translation Memory(ies)")
-                            logger.info(f"memoQ TMs selected: {len(memoq_tm_guids)}")
-                        
-                        if memoq_tb_guids:
-                            st.write(f"   • {len(memoq_tb_guids)} Termbase(s)")
-                            logger.info(f"memoQ TBs selected: {len(memoq_tb_guids)}")
-                    
-                    else:
-                        st.warning("⚠️ Could not connect to memoQ Server")
-                        logger.warning("memoQ Server connection failed")
-                        memoq_client = None
-            
+                process_translation(
+                    xliff_bytes,
+                    tmx_bytes=tmx_bytes,
+                    csv_bytes=csv_bytes,
+                    memoq_tm_guids=st.session_state.selected_tm_guids,
+                    memoq_tb_guids=st.session_state.selected_tb_guids
+                )
             except Exception as e:
-                st.warning(f"❌ memoQ Server error: {str(e)}")
-                logger.error(f"memoQ Server error: {e}", exc_info=True)
+                st.error(f"❌ Translation failed: {str(e)}")
+                logger.error(f"Translation error: {e}", exc_info=True)
+    
+    # Results
+    if st.session_state.translation_results:
+        st.header("✅ Translation Results")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Segments", len(st.session_state.translation_results))
+        with col2:
+            st.metric("From TM (bypass)", st.session_state.bypass_stats.get('bypassed', 0))
+        with col3:
+            st.metric("Via LLM", st.session_state.bypass_stats.get('llm_sent', 0))
+        
+        # Download results
+        st.download_button(
+            label="📥 Download Results (JSON)",
+            data=json.dumps(st.session_state.translation_results, ensure_ascii=False, indent=2),
+            file_name="translations.json",
+            mime="application/json"
+        )
+        
+        # Display logs
+        if st.session_state.translation_log:
+            with st.expander("📋 Translation Log"):
+                st.text(st.session_state.translation_log)
+
+
+def process_translation(xliff_bytes,
+                        tmx_bytes=None,
+                        csv_bytes=None,
+                        memoq_tm_guids=None,
+                        memoq_tb_guids=None):
+    """Main translation processing function"""
+    
+    with st.status("Processing...", expanded=True) as status:
+        
+        # Parse XLIFF
+        st.write("📄 Parsing XLIFF...")
+        try:
+            # Simple XLIFF parsing - replace with your XMLParser
+            segments = parse_xliff_simple(xliff_bytes)
+            st.write(f"✅ Loaded {len(segments)} segments")
+            logger.info(f"Loaded {len(segments)} segments")
+        except Exception as e:
+            st.error(f"Failed to parse XLIFF: {e}")
+            logger.error(f"XLIFF parsing error: {e}")
+            return
+        
+        st.session_state.segment_objects = {seg.id: seg for seg in segments}
+        
+        # Initialize memoQ Server
+        memoq_client = None
+        if st.session_state.memoq_server_url and memoq_tm_guids:
+            st.write("🔗 Connecting to memoQ Server...")
+            try:
+                memoq_client = MemoQServerClient(
+                    st.session_state.memoq_server_url,
+                    st.session_state.memoq_username,
+                    st.session_state.memoq_password
+                )
+                
+                if memoq_client.test_connection():
+                    st.write("✅ Connected to memoQ Server")
+                    logger.info("memoQ Server connected")
+                else:
+                    st.warning("⚠️ Could not connect to memoQ Server")
+                    memoq_client = None
+            except Exception as e:
+                st.warning(f"❌ memoQ Server error: {e}")
+                logger.error(f"memoQ connection error: {e}")
                 memoq_client = None
         
-        # ===== PHASE 3: INITIALIZE PROMPT BUILDER =====
-        if st.session_state.use_generated_prompt and st.session_state.generated_prompt:
-            prompt_builder = PromptBuilder(custom_template=st.session_state.generated_prompt)
-        elif custom_prompt_content:
-            prompt_builder = PromptBuilder(custom_template=custom_prompt_content)
-        else:
-            prompt_builder = PromptBuilder()  # Uses default template
-        
+        # Initialize Prompt Builder
+        prompt_builder = PromptBuilder()
         logger.info("PromptBuilder initialized")
         
-        # ===== PHASE 4: ANALYZE SEGMENTS & COLLECT CONTEXT =====
+        # Analyze segments
         status.update(label="Analyzing segments...", state="running")
         
         bypass_segments = []
@@ -348,50 +402,39 @@ def process_translation(xliff_file,
         tm_context = {}
         tb_context = {}
         dnt_context = {}
-        match_rates = {}
         
-        st.write("🔍 Analyzing TM matches and collecting context...")
-        analysis_progress = st.progress(0)
+        st.write("🔍 Analyzing matches...")
+        progress = st.progress(0)
         
         for i, seg in enumerate(segments):
             
-            # ===== Check memoQ TM for 100% match =====
+            # Check memoQ TM
             if memoq_client and memoq_tm_guids:
                 should_bypass, trans_dict, log_msg = process_single_segment(
                     seg,
                     memoq_client,
                     memoq_tm_guids,
-                    memoq_tb_guids,
-                    acceptance_threshold=st.session_state.acceptance_threshold,
-                    match_threshold=st.session_state.match_threshold
+                    st.session_state.acceptance_threshold
                 )
                 
                 if should_bypass:
                     bypass_segments.append(seg)
                     final_translations.update(trans_dict)
-                    # Extract match rate from memoQ response
-                    match_rates[seg.id] = 100
                 else:
                     llm_segments.append(seg)
-                    
-                    # Collect fuzzy matches for LLM context
                     fuzzy_matches = get_memoq_tm_context(
                         memoq_client,
                         memoq_tm_guids,
                         seg,
-                        match_threshold=st.session_state.match_threshold
+                        st.session_state.match_threshold
                     )
                     if fuzzy_matches:
                         tm_context[seg.id] = fuzzy_matches
-            
             else:
-                # No memoQ - all segments to LLM
                 llm_segments.append(seg)
             
-            # ===== Collect TB context for LLM segments =====
+            # Collect TB context
             if seg in llm_segments:
-                
-                # memoQ Termbase
                 if memoq_client and memoq_tb_guids:
                     tb_matches = get_memoq_tb_context(
                         memoq_client,
@@ -401,105 +444,50 @@ def process_translation(xliff_file,
                     if tb_matches:
                         tb_context[seg.id] = tb_matches
                 
-                # Check DNT list
+                # Check DNT
                 if st.session_state.dnt_terms:
-                    found_dnt = []
-                    for dnt_term in st.session_state.dnt_terms:
-                        if dnt_term.lower() in seg.source.lower():
-                            found_dnt.append(dnt_term)
-                    
+                    found_dnt = [
+                        term for term in st.session_state.dnt_terms
+                        if term.lower() in seg.source.lower()
+                    ]
                     if found_dnt:
                         dnt_context[seg.id] = found_dnt
-                        logger.info(f"[{seg.id}] DNT terms detected: {', '.join(found_dnt)}")
+                        logger.info(f"[{seg.id}] DNT terms: {', '.join(found_dnt)}")
             
-            analysis_progress.progress((i + 1) / len(segments))
+            progress.progress((i + 1) / len(segments))
         
-        # Summary
+        st.write(f"✅ {len(bypass_segments)} from TM")
+        st.write(f"🔄 {len(llm_segments)} to LLM")
+        logger.info(f"Analysis: {len(bypass_segments)} bypass, {len(llm_segments)} LLM")
+        
+        # Save results
+        st.session_state.translation_results = final_translations
         st.session_state.bypass_stats = {
             'bypassed': len(bypass_segments),
             'llm_sent': len(llm_segments)
         }
         
-        st.write(f"✅ **{len(bypass_segments)}** segments from memoQ TM (≥{st.session_state.acceptance_threshold}% match)")
-        st.write(f"🔄 **{len(llm_segments)}** segments need LLM translation")
-        
-        logger.info(
-            f"Segment analysis complete: {len(bypass_segments)} bypass, "
-            f"{len(llm_segments)} LLM, {len(tm_context)} with TM context"
-        )
-        
-        # ===== PHASE 5: PROCESS LLM SEGMENTS IN BATCHES =====
-        if llm_segments:
-            status.update(label=f"Translating {len(llm_segments)} segments...", state="running")
-            
-            llm_progress = st.progress(0)
-            batch_translations_history = []
-            batch_size = 20  # Configure as needed
-            
-            for i in range(0, len(llm_segments), batch_size):
-                batch = llm_segments[i:i + batch_size]
-                batch_num = (i // batch_size) + 1
-                total_batches = (len(llm_segments) + batch_size - 1) // batch_size
-                
-                st.write(f"📤 **Batch {batch_num}/{total_batches}** ({len(batch)} segments)")
-                
-                # ===== Prepare batch context =====
-                batch_tm = {seg.id: tm_context.get(seg.id, []) for seg in batch}
-                batch_tb = {seg.id: tb_context.get(seg.id, []) for seg in batch}
-                batch_dnt = {seg.id: dnt_context.get(seg.id, []) for seg in batch}
-                
-                # Log batch context
-                log_batch_context(batch_num, batch, batch_tm, batch_tb, batch_dnt)
-                
-                # ===== BUILD PROMPT =====
-                prompt = prompt_builder.build_prompt(
-                    source_lang=st.session_state.source_lang,
-                    target_lang=st.session_state.target_lang,
-                    segments=batch,
-                    tm_context=batch_tm,
-                    tb_context=batch_tb,
-                    chat_history=batch_translations_history[-50:],  # Last 50 translations
-                    reference_context=None,  # Optional reference text
-                    dnt_terms=st.session_state.dnt_terms
-                )
-                
-                # Log prompt details
-                log_prompt_details(batch_num, prompt)
-                
-                # ===== SEND TO LLM =====
-                try:
-                    # Your LLM translation call here
-                    # response_text = translator.translate_batch(prompt)
-                    
-                    logger.info(f"Batch {batch_num} translation completed")
-                
-                except Exception as e:
-                    st.error(f"❌ Batch {batch_num} failed: {str(e)}")
-                    logger.error(f"Batch {batch_num} failed: {e}", exc_info=True)
-                
-                llm_progress.progress((i + len(batch)) / len(llm_segments))
-        
-        # ===== PHASE 6: SAVE RESULTS =====
-        st.session_state.translation_results = final_translations
-        st.session_state.match_rates = match_rates
-        st.session_state.chat_history = batch_translations_history
-        
-        status.update(label="✅ Translation Complete!", state="complete")
-        
-        st.success(f"""
-        **Translation Complete!**
-        - ✅ {len(bypass_segments)} segments from memoQ TM (no LLM cost)
-        - 🔄 {len(llm_segments)} segments via LLM
-        - 📊 Total: {len(final_translations)} translations
-        """)
-        
-        logger.info(
-            f"Translation job complete: "
-            f"{len(bypass_segments)} bypass + "
-            f"{len(llm_segments)} LLM = "
-            f"{len(final_translations)} total"
-        )
+        status.update(label="✅ Complete", state="complete")
 
 
-# ===== END OF UPDATED SECTIONS =====
-# Integrate these functions and sections into your existing app.py
+def parse_xliff_simple(xliff_bytes) -> List[TranslationSegment]:
+    """Simple XLIFF parser - replace with your implementation"""
+    import xml.etree.ElementTree as ET
+    
+    segments = []
+    root = ET.fromstring(xliff_bytes)
+    
+    # Parse trans-units
+    for i, tu in enumerate(root.findall('.//{urn:oasis:names:tc:xliff:document:1.2}trans-unit')):
+        seg_id = tu.get('id', str(i))
+        source_elem = tu.find('{urn:oasis:names:tc:xliff:document:1.2}source')
+        
+        if source_elem is not None:
+            source_text = ''.join(source_elem.itertext())
+            segments.append(TranslationSegment(id=seg_id, source=source_text))
+    
+    return segments
+
+
+if __name__ == "__main__":
+    main()

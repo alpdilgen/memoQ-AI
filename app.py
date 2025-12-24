@@ -12,7 +12,7 @@ from services.embedding_matcher import EmbeddingMatcher, get_embedding_cost_esti
 from utils.xml_parser import XMLParser
 from utils.logger import TransactionLogger
 import config
-from services.memoq_server_client import MemoQServerClient, normalize_memoq_tm_response, normalize_memoq_tb_response
+from services.memoq_server_client import MemoQServerClient
 from services.memoq_ui import MemoQUI
 from models.entities import TMMatch, TermMatch
 # --- Setup ---
@@ -687,16 +687,12 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             elif memoq_client and memoq_tm_guids:
                 try:
                     for tm_guid in memoq_tm_guids:
+                        # lookup_segments now returns {segment_index: [TMMatch objects]}
                         results = memoq_client.lookup_segments(tm_guid, [seg.source])
                         logger.info(f"memoQ lookup for {seg.id}: result received")
                         
-                        if results:
-                            # Normalize memoQ response to TMMatch objects
-                            normalized_matches = normalize_memoq_tm_response(
-                                results, 
-                                segment_id=seg.id,
-                                match_threshold=match_threshold
-                            )
+                        if results and 0 in results:
+                            normalized_matches = results[0]  # Already normalized TMMatch objects
                             
                             if normalized_matches:
                                 first_match = normalized_matches[0]
@@ -733,9 +729,9 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
             elif memoq_client and memoq_tb_guids and seg in llm_segments:
                 try:
                     for tb_guid in memoq_tb_guids:
+                        # lookup_terms now returns list of TermMatch objects directly
                         tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
                         if tb_results:
-                            # tb_results should already be normalized TermMatch objects from memoq_client
                             tb_context[seg.id] = tb_results
                             break
                 except Exception as e:

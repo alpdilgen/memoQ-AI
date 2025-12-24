@@ -14,7 +14,6 @@ from utils.logger import TransactionLogger
 import config
 from services.memoq_server_client import MemoQServerClient
 from services.memoq_ui import MemoQUI
-from models.entities import TMMatch, TermMatch
 # --- Setup ---
 st.set_page_config(page_title=config.APP_NAME, layout="wide", page_icon="🌍")
 
@@ -562,47 +561,50 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 
 # --- Main Translation Logic ---
 
-def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
-    if not api_key:
-        st.error("Please provide an API Key.")
-        return
 
-    with st.status("Processing...", expanded=True) as status:
+def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
+    """
+    Main translation processing function with enhanced logging
+    """
+    if not api_key:
+        st.error("❌ Please provide an API Key.")
+        return
+    
+    with st.status("Processing translation...", expanded=True) as status:
         
-        # 1. Parse XLIFF
+        start_time = time.time()
+        
+        # ===== 1. PARSE XLIFF =====
         st.write("📄 Parsing XLIFF...")
         segments = XMLParser.parse_xliff(xliff_bytes)
-        st.write(f"✅ Loaded {len(segments)} segments")
+        total_segments = len(segments)
+        st.write(f"✅ Loaded {total_segments} segments")
         
         st.session_state.segment_objects = {seg.id: seg for seg in segments}
         st.session_state.chat_history = []
         
-        # Initialize Logger
+        # Initialize logger
         logger = TransactionLogger()
-        logger.info(f"Started translation job for {len(segments)} segments.")
-        logger.info(f"Source: {src_code} | Target: {tgt_code} | Model: {model}")
-        logger.info(f"TM Acceptance: ≥{acceptance_threshold}% | TM Match: ≥{match_threshold}%")
-        logger.info(f"Chat History Length: {chat_history_length}")
+        logger.init_job(
+            total_segments=total_segments,
+            src_lang=src_code,
+            tgt_lang=config.SUPPORTED_LANGUAGES[tgt_code],
+            model=model,
+            acceptance_threshold=acceptance_threshold,
+            match_threshold=match_threshold,
+            chat_history_length=chat_history_length,
+            use_memoq=bool(st.session_state.memoq_client and (memoq_tm_guids or memoq_tb_guids)),
+            memoq_tm_count=len(memoq_tm_guids) if memoq_tm_guids else 0,
+            memoq_tb_count=len(memoq_tb_guids) if memoq_tb_guids else 0
+        )
+        logger.log_prompt_template("generated" if st.session_state.use_generated_prompt else "default")
         
-        if st.session_state.reference_chunks:
-            logger.info(f"Reference file: {len(st.session_state.reference_chunks)} style samples loaded")
-        
-        if st.session_state.use_generated_prompt:
-            logger.info("Using generated prompt from Prompt Builder")
-        
-        # 2. Initialize TM Matcher
+        # ===== 2. LOAD LOCAL TM =====
         tm_matcher = None
         if tmx_bytes:
-            st.write("🔄 Loading Translation Memory...")
+            st.write("🔄 Loading Translation Memory (Local)...")
             load_start = time.time()
-            
-            tm_matcher = TMatcher(
-                tmx_bytes, 
-                src_code, 
-                tgt_code, 
-                acceptance_threshold=acceptance_threshold
-            )
-            
+            tm_matcher = TMatcher(tmx_bytes, src_code, tgt_code, acceptance_threshold=acceptance_threshold)
             load_time = time.time() - load_start
             
             if load_time < 2:
@@ -615,17 +617,17 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 'load_time': load_time,
                 'file_hash': tm_matcher.file_hash
             }
-            logger.info(f"TM loaded: {tm_matcher.tu_count} TUs in {load_time:.2f}s")
+            logger.log(f"TM loaded: {tm_matcher.tu_count} TUs in {load_time:.2f}s")
         
-        # 3. Initialize TB Matcher
+        # ===== 3. LOAD LOCAL TB =====
         tb_matcher = None
         if csv_bytes:
             st.write("🔄 Loading Termbase...")
             tb_matcher = TBMatcher(csv_bytes)
             st.write(f"✅ Termbase Ready: {tb_matcher.term_count:,} terms")
-            logger.info(f"Termbase loaded: {tb_matcher.term_count} terms (columns: {tb_matcher.src_col} → {tb_matcher.tgt_col})")
+            logger.log(f"Termbase loaded: {tb_matcher.term_count} terms (columns: {tb_matcher.src_col} → {tb_matcher.tgt_col})")
         
-        # 3.5 Initialize memoQ Server client if TMs/TBs selected
+        # ===== 4. INIT memoQ CLIENT =====
         memoq_client = None
         if memoq_tm_guids or memoq_tb_guids:
             try:
@@ -636,28 +638,27 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                         st.write(f"   • {len(memoq_tm_guids)} Translation Memory(ies)")
                     if memoq_tb_guids:
                         st.write(f"   • {len(memoq_tb_guids)} Termbase(s)")
-                    logger.info(f"memoQ Server: {len(memoq_tm_guids)} TMs, {len(memoq_tb_guids)} TBs")
+                    logger.log(f"memoQ Server: {len(memoq_tm_guids)} TMs, {len(memoq_tb_guids)} TBs")
             except Exception as e:
                 st.warning(f"Could not connect to memoQ Server: {str(e)}")
-                logger.info(f"memoQ connection error: {e}")
+                logger.log(f"memoQ connection error: {e}")
         
-        # 4. Initialize Prompt Builder
-        # Priority: Generated prompt > Custom file > Default
+        # ===== 5. INIT PROMPT BUILDER =====
         if st.session_state.use_generated_prompt and st.session_state.generated_prompt:
             prompt_builder = PromptBuilder(custom_template=st.session_state.generated_prompt)
-            logger.info("Using generated prompt template from Prompt Builder.")
+            logger.log("Using generated prompt template from Prompt Builder.")
         elif custom_prompt_content:
             prompt_builder = PromptBuilder(custom_template=custom_prompt_content)
-            logger.info("Using custom prompt template from file.")
+            logger.log("Using custom prompt template from file.")
         else:
             prompt_builder = PromptBuilder(template_path=config.PROMPT_TEMPLATE_PATH)
-            logger.info("Using default prompt template.")
+            logger.log("Using default prompt template.")
         
         translator = AITranslator("OpenAI", api_key, model)
         
         status.update(label="Analyzing segments...", state="running")
         
-        # 5. Analyze segments
+        # ===== 6. ANALYZE SEGMENTS =====
         bypass_segments = []
         llm_segments = []
         final_translations = {}
@@ -668,76 +669,94 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         analysis_progress = st.progress(0)
         
         for i, seg in enumerate(segments):
+            logger.log_segment_content(seg.id, seg.source)
+            
+            # Check local TM
             if tm_matcher:
-                should_bypass, tm_translation, match_score = tm_matcher.should_bypass_llm(
-                    seg.source, 
-                    match_threshold=match_threshold
-                )
+                should_bypass, tm_translation, match_score = tm_matcher.should_bypass_llm(seg.source, match_threshold=match_threshold)
                 
                 if should_bypass and tm_translation:
                     bypass_segments.append(seg)
                     final_translations[seg.id] = apply_tm_to_segment(seg.source, tm_translation)
-                    logger.info(f"[{seg.id}] BYPASS ({match_score:.0f}% TM match)")
+                    logger.log_segment_analysis(seg.id, int(match_score), source="Local TM")
+                    logger.log_segment_bypass(seg.id, int(match_score), "Local TM")
                 else:
                     llm_segments.append(seg)
                     matches, _ = tm_matcher.extract_matches(seg.source, threshold=match_threshold)
                     if matches:
                         tm_context[seg.id] = matches
-            # Check memoQ TMs if available
+                    if match_score >= match_threshold:
+                        logger.log_segment_analysis(seg.id, int(match_score), source="Local TM")
+                        logger.log_segment_to_llm(seg.id, int(match_score), "Local TM")
+            
+            # Check memoQ TM
             elif memoq_client and memoq_tm_guids:
                 try:
                     for tm_guid in memoq_tm_guids:
-                        # lookup_segments now returns {segment_index: [TMMatch objects]}
                         results = memoq_client.lookup_segments(tm_guid, [seg.source])
-                        logger.info(f"memoQ lookup for {seg.id}: result received")
                         
                         if results and 0 in results:
-                            normalized_matches = results[0]  # Already normalized TMMatch objects
+                            normalized_matches = results[0]
                             
                             if normalized_matches:
                                 first_match = normalized_matches[0]
                                 match_score = first_match.similarity
                                 target_text = first_match.target_text
                                 
-                                logger.info(f"[{seg.id}] memoQ match score: {match_score}%")
+                                logger.log_segment_analysis(seg.id, match_score, source="memoQ")
                                 
                                 if match_score >= acceptance_threshold:
                                     bypass_segments.append(seg)
                                     final_translations[seg.id] = target_text
-                                    logger.info(f"[{seg.id}] BYPASS ({match_score}% memoQ TM match)")
+                                    tm_context[seg.id] = normalized_matches
+                                    logger.log_segment_bypass(seg.id, match_score, "memoQ TM")
                                     break
                                 elif match_score >= match_threshold:
                                     llm_segments.append(seg)
                                     tm_context[seg.id] = normalized_matches
-                                    logger.info(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
+                                    logger.log_segment_to_llm(seg.id, match_score, "memoQ TM")
                                     break
                             else:
                                 llm_segments.append(seg)
+                                logger.log_segment_to_llm(seg.id)
                         else:
                             llm_segments.append(seg)
+                            logger.log_segment_to_llm(seg.id)
                 except Exception as e:
-                    logger.info(f"memoQ TM lookup error for {seg.id}: {str(e)}")
+                    logger.log_error(0, f"memoQ TM lookup error for {seg.id}: {str(e)}")
                     llm_segments.append(seg)
+                    logger.log_segment_to_llm(seg.id)
+            
             else:
                 llm_segments.append(seg)
+                logger.log_segment_to_llm(seg.id)
             
-            if tb_matcher and seg in llm_segments:
-                tb_matches = tb_matcher.extract_matches(seg.source)
-                if tb_matches:
-                    tb_context[seg.id] = tb_matches
-            # Check memoQ TBs if available
-            elif memoq_client and memoq_tb_guids and seg in llm_segments:
-                try:
-                    for tb_guid in memoq_tb_guids:
-                        # lookup_terms now returns list of TermMatch objects directly
-                        tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
-                        if tb_results:
-                            tb_context[seg.id] = tb_results
-                            break
-                except Exception as e:
-                    logger.info(f"memoQ TB lookup error for {seg.id}: {e}")
+            # Collect TB context for LLM segments
+            if seg in llm_segments:
+                # Local TB
+                if tb_matcher:
+                    tb_matches = tb_matcher.extract_matches(seg.source)
+                    if tb_matches:
+                        tb_context[seg.id] = tb_matches
+                
+                # memoQ TB
+                if memoq_client and memoq_tb_guids:
+                    try:
+                        for tb_guid in memoq_tb_guids:
+                            tb_results = memoq_client.lookup_terms(tb_guid, [seg.source])
+                            if tb_results:
+                                tb_context[seg.id] = tb_results
+                                break
+                    except Exception as e:
+                        logger.log_error(0, f"memoQ TB lookup error for {seg.id}: {e}")
+                
+                # DNT check
+                if st.session_state.dnt_terms:
+                    found_dnt = [term for term in st.session_state.dnt_terms if term.lower() in seg.source.lower()]
+                    if found_dnt:
+                        logger.log(f"[{seg.id}] DNT terms found: {', '.join(found_dnt)}")
             
-            analysis_progress.progress((i + 1) / len(segments))
+            analysis_progress.progress((i + 1) / total_segments)
         
         st.session_state.bypass_stats = {
             'bypassed': len(bypass_segments),
@@ -747,11 +766,11 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         st.write(f"✅ **{len(bypass_segments)}** segments from TM (≥{acceptance_threshold}% match)")
         st.write(f"🔄 **{len(llm_segments)}** segments need LLM translation")
         
-        logger.info(f"Analysis complete: {len(bypass_segments)} bypass, {len(llm_segments)} LLM")
+        logger.log_analysis_complete(len(bypass_segments), len(llm_segments), total_segments)
         logger.log_tm_matches(tm_context)
         logger.log_tb_matches(tb_context)
         
-        # 6. Process LLM segments
+        # ===== 7. PROCESS LLM SEGMENTS =====
         if llm_segments:
             status.update(label=f"Translating {len(llm_segments)} segments...", state="running")
             
@@ -770,32 +789,27 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 batch_tm = {seg.id: tm_context.get(seg.id, []) for seg in batch}
                 batch_tb = {seg.id: tb_context.get(seg.id, []) for seg in batch}
                 
-                history_context = get_chat_history_context(
-                    batch_translations_history, 
-                    chat_history_length * config.BATCH_SIZE
-                )
+                tm_count = sum(len(m) for m in batch_tm.values() if m)
+                tb_count = sum(len(t) for t in batch_tb.values() if t)
+                
+                logger.log_batch_context(batch_num, len(batch), tm_count, tb_count)
+                logger.log_batch_segments(batch_num, batch)
+                logger.log_tm_matches(batch_tm)
+                logger.log_tb_matches(batch_tb)
+                
+                history_context = get_chat_history_context(batch_translations_history, chat_history_length * config.BATCH_SIZE)
                 
                 if history_context:
-                    logger.info(f"Chat history: {len(history_context)} previous translations included")
+                    logger.log(f"Chat history: {len(history_context)} previous translations included")
                 
-                # Get reference samples for this batch
                 reference_samples = ""
                 
-                # Use semantic matching if embedding matcher is ready
                 if st.session_state.reference_embeddings_ready and st.session_state.embedding_matcher:
                     try:
-                        # Get source texts from batch
                         source_texts = [seg.source for seg in batch]
-                        
-                        # Find semantically similar references for all segments in batch
                         matcher = st.session_state.embedding_matcher
-                        matches_dict = matcher.find_similar_batch(
-                            source_texts,
-                            top_k=3,
-                            min_similarity=0.35
-                        )
+                        matches_dict = matcher.find_similar_batch(source_texts, top_k=3, min_similarity=0.35)
                         
-                        # Collect unique references
                         all_matches = []
                         seen_indices = set()
                         for seg_matches in matches_dict.values():
@@ -804,50 +818,37 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     all_matches.append(m)
                                     seen_indices.add(m.index)
                         
-                        # Sort by similarity and format
                         all_matches.sort(key=lambda x: x.similarity, reverse=True)
                         reference_samples = matcher.format_reference_context(all_matches[:8], max_chars=2000)
                         
                         if reference_samples:
-                            logger.info(f"Semantic reference: {len(all_matches)} matches, {len(reference_samples)} chars")
-                            
+                            logger.log(f"Semantic reference: {len(all_matches)} matches, {len(reference_samples)} chars")
                     except Exception as e:
-                        logger.info(f"Semantic reference error: {e}")
-                        # Fallback to simple sampling
+                        logger.log(f"Semantic reference error: {e}")
                         if st.session_state.reference_chunks:
-                            reference_samples = get_reference_samples(
-                                st.session_state.reference_chunks,
-                                batch_num,
-                                samples_per_batch=5,
-                                max_chars=1500
-                            )
+                            reference_samples = get_reference_samples(st.session_state.reference_chunks, batch_num, samples_per_batch=5, max_chars=1500)
                 
-                # Fallback: simple rotating samples (no embeddings)
                 elif st.session_state.reference_chunks:
-                    reference_samples = get_reference_samples(
-                        st.session_state.reference_chunks,
-                        batch_num,
-                        samples_per_batch=5,
-                        max_chars=1500
-                    )
+                    reference_samples = get_reference_samples(st.session_state.reference_chunks, batch_num, samples_per_batch=5, max_chars=1500)
                     if reference_samples:
-                        logger.info(f"Reference (rotating): {len(reference_samples)} chars of style samples")
+                        logger.log(f"Reference (rotating): {len(reference_samples)} chars of style samples")
                 
-                # Get DNT terms
                 dnt_terms = st.session_state.dnt_terms if st.session_state.dnt_terms else None
                 if dnt_terms:
-                    logger.info(f"DNT list: {len(dnt_terms)} forbidden terms")
+                    logger.log(f"DNT list: {len(dnt_terms)} forbidden terms")
                 
                 prompt = prompt_builder.build_prompt(
                     config.SUPPORTED_LANGUAGES[src_code],
                     config.SUPPORTED_LANGUAGES[tgt_code],
-                    batch, 
-                    batch_tm, 
+                    batch,
+                    batch_tm,
                     batch_tb,
                     chat_history=history_context,
                     reference_context=reference_samples,
                     dnt_terms=dnt_terms
                 )
+                
+                logger.log_prompt_sent(batch_num, prompt)
                 
                 try:
                     response_text, tokens = translator.translate_batch(prompt)
@@ -855,6 +856,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     
                     lines = response_text.strip().split('\n')
                     batch_results = []
+                    parsed_translations = {}
                     
                     for line in lines:
                         if line.startswith('[') and ']' in line:
@@ -862,38 +864,44 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                 seg_id = line[line.find('[')+1:line.find(']')]
                                 trans_text = line[line.find(']')+1:].strip()
                                 final_translations[seg_id] = trans_text
+                                parsed_translations[seg_id] = trans_text
                                 
                                 seg_obj = st.session_state.segment_objects.get(seg_id)
                                 if seg_obj:
-                                    batch_results.append({
-                                        'source': seg_obj.source,
-                                        'target': trans_text
-                                    })
+                                    batch_results.append({'source': seg_obj.source, 'target': trans_text})
                             except:
                                 pass
                     
+                    logger.log_parsed_response(batch_num, parsed_translations)
                     batch_translations_history.extend(batch_results)
-                    
+                
                 except Exception as e:
-                    err_msg = f"Batch {batch_num} failed: {e}"
-                    st.error(err_msg)
-                    logger.info(f"ERROR: {err_msg}")
+                    logger.log_error(batch_num, str(e))
+                    st.error(f"❌ Batch {batch_num} failed: {str(e)}")
                 
                 llm_progress.progress((i + len(batch)) / len(llm_segments))
         
-        # 7. Save results
+        # ===== 8. SAVE RESULTS =====
+        duration = time.time() - start_time
+        
         st.session_state.translation_results = final_translations
-        st.session_state.translation_log = logger.get_content()
         st.session_state.chat_history = batch_translations_history if llm_segments else []
+        
+        logger.log_summary(len(bypass_segments), len(llm_segments), total_segments, duration)
+        st.session_state.translation_log = logger.get_content()
+        
+        log_filename = f"translation_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        logger.save_to_file(log_filename)
         
         status.update(label="✅ Translation Complete!", state="complete")
         
         st.success(f"""
         **Translation Complete!**
-        - {len(bypass_segments)} segments from TM (no API cost)
-        - {len(llm_segments)} segments via LLM
-        - {len(final_translations)} total translations
+        - ✅ {len(bypass_segments)} segments from TM (no API cost)
+        - 🔄 {len(llm_segments)} segments via LLM
+        - 📊 {len(final_translations)} total translations
         """)
+
 
 
 # --- UI Layout ---

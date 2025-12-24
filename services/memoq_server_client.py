@@ -343,6 +343,22 @@ class MemoQServerClient:
             logger.error(error_msg)
             raise Exception(error_msg)
     
+    def login(self) -> bool:
+        """
+        Login to memoQ Server (validate credentials)
+        
+        Returns:
+            True if login successful, False otherwise
+        """
+        try:
+            result = self._make_request("GET", "/status")
+            logger.info(f"✓ memoQ Server login successful")
+            return True
+        
+        except Exception as e:
+            logger.error(f"✗ memoQ Server login failed: {e}")
+            return False
+    
     def test_connection(self) -> bool:
         """
         Test connection to memoQ Server

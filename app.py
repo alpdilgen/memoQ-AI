@@ -735,7 +735,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     break
                                 elif match_score >= match_threshold:
                                     llm_segments.append(seg)
-                                    tm_context[seg.id] = [{'similarity': match_score, 'target': target_text}]
+                                    tm_context[seg.id] = [hit]  # Store TMMatch object directly, not dict
                                     logger.log(f"[{seg.id}] CONTEXT ({match_score}% memoQ fuzzy match)")
                                     segment_matched = True
                                     break

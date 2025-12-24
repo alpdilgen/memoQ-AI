@@ -457,6 +457,23 @@ class MemoQServerClient:
             logger.error(f"Failed to list termbases: {e}")
             return []
     
+    def list_tbs(self,
+                 src_lang: Optional[str] = None,
+                 tgt_lang: Optional[str] = None,
+                 force_refresh: bool = False) -> List[Dict]:
+        """
+        Alias for list_termbases() for backward compatibility
+        
+        Args:
+            src_lang: Filter by source language
+            tgt_lang: Filter by target language
+            force_refresh: Ignore cache and fetch fresh
+        
+        Returns:
+            List of termbase objects with metadata
+        """
+        return self.list_termbases(src_lang, tgt_lang, force_refresh)
+    
     def lookup_segments(self,
                         tm_guid: str,
                         segments: List[str],

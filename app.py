@@ -589,14 +589,15 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         # 1. Parse XLIFF
         st.write("📄 Parsing XLIFF...")
         segments = XMLParser.parse_xliff(xliff_bytes)
-        st.write(f"✅ Loaded {len(segments)} segments")
+        total_segments = len(segments)
+        st.write(f"✅ Loaded {total_segments} segments")
         
         st.session_state.segment_objects = {seg.id: seg for seg in segments}
         st.session_state.chat_history = []
         
         # Initialize Logger
         logger = TransactionLogger()
-        logger.log(f"Started translation job for {len(segments)} segments.")
+        logger.log(f"Started translation job for {total_segments} segments.")
         logger.log(f"Source: {src_code} | Target: {tgt_code} | Model: {model}")
         logger.log(f"TM Acceptance: ≥{acceptance_threshold}% | TM Match: ≥{match_threshold}%")
         logger.log(f"Chat History Length: {chat_history_length}")

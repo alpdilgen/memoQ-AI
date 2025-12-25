@@ -787,6 +787,17 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         logger.log_tm_matches(tm_context)
         logger.log_tb_matches(tb_context)
         
+        # IMPROVEMENT: Reorder LLM segments - process WITH context first
+        # This builds chat history early for better translation consistency
+        segments_with_context = [s for s in llm_segments if s.id in tm_context]
+        segments_no_context = [s for s in llm_segments if s.id not in tm_context]
+        
+        original_count = len(llm_segments)
+        llm_segments = segments_with_context + segments_no_context
+        
+        logger.log(f"Segments reordered: {len(segments_with_context)} with TM context, {len(segments_no_context)} without")
+        logger.log(f"Processing order optimized for better consistency")
+        
         # 6. Process LLM segments
         if llm_segments:
             status.update(label=f"Translating {len(llm_segments)} segments...", state="running")
@@ -891,6 +902,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                     
                     lines = response_text.strip().split('\n')
                     batch_results = []
+                    parsed_translations = {}
                     
                     for line in lines:
                         if line.startswith('[') and ']' in line:
@@ -898,6 +910,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                 seg_id = line[line.find('[')+1:line.find(']')]
                                 trans_text = line[line.find(']')+1:].strip()
                                 final_translations[seg_id] = trans_text
+                                parsed_translations[seg_id] = trans_text
                                 
                                 seg_obj = st.session_state.segment_objects.get(seg_id)
                                 if seg_obj:
@@ -907,6 +920,15 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                                     })
                             except:
                                 pass
+                    
+                    # IMPROVEMENT: Log actual translations for transparency
+                    if parsed_translations:
+                        logger.log(f"Parsed Response (Batch {batch_num}):")
+                        for seg_id in sorted(parsed_translations.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+                            trans_text = parsed_translations[seg_id]
+                            # Truncate to 80 chars for readability
+                            display_text = trans_text[:80] + "..." if len(trans_text) > 80 else trans_text
+                            logger.log(f"  [{seg_id}] {display_text}")
                     
                     batch_translations_history.extend(batch_results)
                     
@@ -918,9 +940,28 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
                 llm_progress.progress((i + len(batch)) / len(llm_segments))
         
         # 7. Save results
+        duration = time.time() - start_time
         st.session_state.translation_results = final_translations
         st.session_state.translation_log = logger.get_content()
         st.session_state.chat_history = batch_translations_history if llm_segments else []
+        
+        # IMPROVEMENT: Log final summary
+        logger.log("\n" + "="*80)
+        logger.log("TRANSLATION JOB SUMMARY")
+        logger.log("="*80)
+        logger.log(f"Total Segments: {total_segments}")
+        logger.log(f"✓ Bypass (≥95%): {len(bypass_segments)} ({len(bypass_segments)/total_segments*100:.1f}%)")
+        logger.log(f"✓ With TM Context (60-94%): {len(tm_context)} ({len(tm_context)/total_segments*100:.1f}%)")
+        llm_only_count = len(llm_segments) - len(tm_context)
+        logger.log(f"✓ LLM Only (<60%): {llm_only_count} ({llm_only_count/total_segments*100:.1f}%)")
+        logger.log(f"Processing Time: {duration:.1f} seconds")
+        logger.log(f"Batch Size: {batch_size} segments")
+        num_batches = (len(llm_segments) + batch_size - 1) // batch_size if llm_segments else 0
+        logger.log(f"Total Batches: {num_batches}")
+        logger.log("="*80 + "\n")
+        
+        # Update session state with final log
+        st.session_state.translation_log = logger.get_content()
         
         status.update(label="✅ Translation Complete!", state="complete")
         

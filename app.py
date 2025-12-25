@@ -578,6 +578,8 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 # --- Main Translation Logic ---
 
 def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
+    start_time = time.time()  # Track total processing duration
+    
     if not api_key:
         st.error("Please provide an API Key.")
         return

@@ -72,6 +72,8 @@ if 'memoq_tms_list' not in st.session_state:
     st.session_state.memoq_tms_list = []
 if 'memoq_tbs_list' not in st.session_state:
     st.session_state.memoq_tbs_list = []
+
+# Analysis screen state
 if 'analysis_triggered' not in st.session_state:
     st.session_state.analysis_triggered = False
 if 'ready_to_translate' not in st.session_state:
@@ -567,9 +569,6 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 # --- Main Translation Logic ---
 
 def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
-    # Initialize Logger FIRST
-    logger = TransactionLogger()
-    
     if not api_key:
         st.error("Please provide an API Key.")
         return
@@ -584,7 +583,8 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         st.session_state.segment_objects = {seg.id: seg for seg in segments}
         st.session_state.chat_history = []
         
-        # Logger already initialized above
+        # Initialize Logger
+        logger = TransactionLogger()
         logger.info(f"Started translation job for {len(segments)} segments.")
         logger.info(f"Source: {src_code} | Target: {tgt_code} | Model: {model}")
         logger.info(f"TM Acceptance: ≥{acceptance_threshold}% | TM Match: ≥{match_threshold}%")
@@ -969,7 +969,7 @@ with tab1:
         
         st.markdown("---")
         
-        # ANALYSIS SCREEN - Show if file and TMs selected
+        # ANALYSIS SCREEN - Add analysis before translation
         if xliff_file and len(st.session_state.selected_tm_guids) > 0:
             if not st.session_state.get('ready_to_translate', False):
                 show_analysis_screen(xliff_file, len(st.session_state.selected_tm_guids))
@@ -1088,27 +1088,24 @@ with tab1:
         """)
         
         if st.button("🚀 Start Translation", type="primary", use_container_width=True, disabled=not st.session_state.get('ready_to_translate', False)):
-            if st.session_state.get('ready_to_translate', False):
-                if xliff_file:
-                    xliff_file.seek(0)
-                    
-                    custom_prompt = None
-                    if prompt_file and not st.session_state.use_generated_prompt:
-                        prompt_file.seek(0)
-                        custom_prompt = prompt_file.read().decode('utf-8')
-                    
-                    process_translation(
-                        xliff_file.getvalue(),
-                        tmx_bytes=None,
-                        csv_bytes=None,
-                        custom_prompt_content=custom_prompt,
-                        memoq_tm_guids=st.session_state.selected_tm_guids,
-                        memoq_tb_guids=st.session_state.selected_tb_guids
-                    )
-                else:
-                    st.error("XLIFF file is required.")
-            else:
-                st.error("⬆️ Complete analysis first")
+            if st.session_state.get('ready_to_translate', False) and xliff_file:
+                xliff_file.seek(0)
+                
+                custom_prompt = None
+                if prompt_file and not st.session_state.use_generated_prompt:
+                    prompt_file.seek(0)
+                    custom_prompt = prompt_file.read().decode('utf-8')
+                
+                process_translation(
+                    xliff_file.getvalue(),
+                    tmx_bytes=None,
+                    csv_bytes=None,
+                    custom_prompt_content=custom_prompt,
+                    memoq_tm_guids=st.session_state.selected_tm_guids,
+                    memoq_tb_guids=st.session_state.selected_tb_guids
+                )
+            elif not st.session_state.get('ready_to_translate', False):
+                st.error("⬆️ Complete file analysis first")
 
 # === TAB 2: RESULTS ===
 with tab2:

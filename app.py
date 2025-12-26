@@ -567,6 +567,9 @@ def get_chat_history_context(history: list, max_items: int) -> list:
 # --- Main Translation Logic ---
 
 def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content=None, memoq_tm_guids=None, memoq_tb_guids=None):
+    # Initialize Logger FIRST
+    logger = TransactionLogger()
+    
     if not api_key:
         st.error("Please provide an API Key.")
         return
@@ -581,8 +584,7 @@ def process_translation(xliff_bytes, tmx_bytes, csv_bytes, custom_prompt_content
         st.session_state.segment_objects = {seg.id: seg for seg in segments}
         st.session_state.chat_history = []
         
-        # Initialize Logger
-        logger = TransactionLogger()
+        # Logger already initialized above
         logger.info(f"Started translation job for {len(segments)} segments.")
         logger.info(f"Source: {src_code} | Target: {tgt_code} | Model: {model}")
         logger.info(f"TM Acceptance: ≥{acceptance_threshold}% | TM Match: ≥{match_threshold}%")

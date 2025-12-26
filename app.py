@@ -72,8 +72,6 @@ if 'memoq_tms_list' not in st.session_state:
     st.session_state.memoq_tms_list = []
 if 'memoq_tbs_list' not in st.session_state:
     st.session_state.memoq_tbs_list = []
-
-# Analysis screen state
 if 'analysis_triggered' not in st.session_state:
     st.session_state.analysis_triggered = False
 if 'ready_to_translate' not in st.session_state:
@@ -969,7 +967,7 @@ with tab1:
         
         st.markdown("---")
         
-        # ANALYSIS SCREEN - Show if file uploaded and ready
+        # ANALYSIS SCREEN - Show if file and TMs selected
         if xliff_file and len(st.session_state.selected_tm_guids) > 0:
             if not st.session_state.get('ready_to_translate', False):
                 show_analysis_screen(xliff_file, len(st.session_state.selected_tm_guids))

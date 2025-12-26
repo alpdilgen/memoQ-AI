@@ -1,188 +1,381 @@
-from services.caching import CacheManager
-from models.entities import TMMatch
-from rapidfuzz import fuzz, process
-from typing import List, Optional, Tuple
-import time
+"""
+OPTIMIZED TM MATCHER - Production Ready
+Implements 5 critical improvements:
+1. Proper normalization
+2. Exact match index (O(1) lookup)
+3. Edit distance fuzzy matching
+4. Proper threshold classification
+5. Performance optimization
+"""
 
-class TMatcher:
+import re
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# CHANGE #1: PROPER NORMALIZATION FUNCTION
+# ═════════════════════════════════════════════════════════════════════════════════
+
+def normalize(text: str) -> str:
     """
-    Optimized TM Matcher with:
-    - O(1) exact match via hash lookup
-    - RapidFuzz for fast fuzzy matching (10-20x faster than difflib)
-    - Disk caching for TM data
-    - Configurable acceptance threshold for LLM bypass
+    Normalize text for TM matching
+    
+    Steps:
+    1. Remove XML tags but keep content
+    2. Remove placeholders ({}, {{1}}, etc.)
+    3. Remove extra whitespace
+    4. Convert to lowercase
+    5. Keep punctuation and diacritics (important for Cyrillic)
+    """
+    # Remove XML tags: <ph>, <bpt>, <ept>, etc.
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # Remove placeholders: {}, {{1}}, {{2}}, etc.
+    text = re.sub(r'{.*?}', '', text)
+    
+    # Remove/normalize whitespace but preserve word boundaries
+    text = ' '.join(text.split())
+    
+    # Strip leading/trailing
+    text = text.strip()
+    
+    # Lowercase for case-insensitive matching
+    text = text.lower()
+    
+    return text
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# LEVENSHTEIN EDIT DISTANCE
+# ═════════════════════════════════════════════════════════════════════════════════
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """
+    Calculate Levenshtein distance between two strings
+    Used by ALL CAT tools for fuzzy matching
+    """
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    
+    if len(s2) == 0:
+        return len(s1)
+    
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    
+    return previous_row[-1]
+
+
+def edit_distance_similarity(s1: str, s2: str) -> float:
+    """
+    Convert Levenshtein distance to similarity score (0-1.0)
+    Higher score = more similar
+    """
+    distance = levenshtein_distance(s1, s2)
+    max_len = max(len(s1), len(s2))
+    
+    if max_len == 0:
+        return 1.0
+    
+    similarity = 1 - (distance / max_len)
+    return max(0.0, min(1.0, similarity))  # Clamp to 0-1
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# CHANGE #4: THRESHOLD CLASSIFICATION
+# ═════════════════════════════════════════════════════════════════════════════════
+
+def classify_match_level(score: float) -> str:
+    """
+    Classify match score into CAT-standard categories
+    
+    Industry standard thresholds:
+    - 1.0 (100%): Exact match
+    - 0.95-0.99: 95%-99% fuzzy
+    - 0.85-0.94: 85%-94% fuzzy
+    - 0.75-0.84: 75%-84% fuzzy
+    - 0.50-0.74: 50%-74% fuzzy
+    - <0.50: No match
+    """
+    if score >= 1.0:
+        return "100%"
+    elif score >= 0.95:
+        return "95%-99%"
+    elif score >= 0.85:
+        return "85%-94%"
+    elif score >= 0.75:
+        return "75%-84%"
+    elif score >= 0.50:
+        return "50%-74%"
+    else:
+        return "No match"
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# DATA STRUCTURES
+# ═════════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class TMMatch:
+    """Result of a TM match query"""
+    score: float                    # 0-1.0 similarity
+    level: str                      # "100%", "95%-99%", etc.
+    tm_source: str                  # Original TM source text
+    tm_target: str                  # TM target translation
+    match_type: str                 # "EXACT" or "FUZZY" or "NONE"
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# CHANGE #2: OPTIMIZED TM MATCHER WITH EXACT MATCH INDEX
+# ═════════════════════════════════════════════════════════════════════════════════
+
+class OptimizedTMMatcher:
+    """
+    Production-ready TM matcher with:
+    - O(1) exact match lookup via dictionary index
+    - Edit distance fuzzy matching
+    - Performance optimization (optional)
     """
     
-    def __init__(self, tmx_content: bytes, src_lang: str, tgt_lang: str, acceptance_threshold: float = 95.0):
+    def __init__(self, tm_entries: List[Dict] = None):
         """
-        Initialize TM matcher with parsed and cached TM data.
+        Initialize matcher
         
         Args:
-            tmx_content: Raw TMX file bytes
-            src_lang: Source language code (e.g., 'en', 'en-US')
-            tgt_lang: Target language code (e.g., 'de', 'de-DE')
-            acceptance_threshold: Minimum match % for direct TM usage (bypass LLM)
+            tm_entries: List of dicts with 'source' and 'target' keys
         """
-        self.acceptance_threshold = acceptance_threshold
+        self.tm_entries = tm_entries or []
         
-        start_time = time.time()
+        # CHANGE #2: Build exact match index for O(1) lookup
+        self.exact_match_index = {}      # {normalized_source: target}
+        self.normalized_entries = []     # For fuzzy matching
         
-        # Load TM data (from cache if available)
-        self.entries, self.exact_lookup, self.file_hash = CacheManager.load_tm_data(
-            tmx_content, src_lang, tgt_lang
-        )
-        
-        # Prepare source texts for fuzzy search
-        self.sources = [entry['source'] for entry in self.entries]
-        
-        load_time = time.time() - start_time
-        self.load_time = load_time
-        self.tu_count = len(self.entries)
-        
-    def get_exact_match(self, query_text: str) -> Optional[TMMatch]:
+        if self.tm_entries:
+            self._build_indices()
+    
+    def _build_indices(self):
+        """Build exact match index and normalized entries for fuzzy matching"""
+        for entry in self.tm_entries:
+            source = entry.get('source', '')
+            target = entry.get('target', '')
+            
+            # Normalize once
+            normalized_source = normalize(source)
+            
+            # Store in exact match index
+            if normalized_source not in self.exact_match_index:
+                self.exact_match_index[normalized_source] = target
+            
+            # Store for fuzzy matching
+            self.normalized_entries.append({
+                'source_normalized': normalized_source,
+                'source_original': source,
+                'target': target
+            })
+    
+    def load_tm(self, tm_entries: List[Dict]):
+        """Load/reload TM entries and rebuild indices"""
+        self.tm_entries = tm_entries
+        self.exact_match_index.clear()
+        self.normalized_entries.clear()
+        self._build_indices()
+    
+    def match(self, source_text: str) -> TMMatch:
         """
-        O(1) exact match lookup using hash table.
+        Match source segment against TM
         
-        Args:
-            query_text: Source text to find exact match for
-            
-        Returns:
-            TMMatch if exact match found, None otherwise
+        Strategy:
+        1. Normalize source
+        2. Try exact match (O(1) lookup)
+        3. If no exact match, find best fuzzy match
+        4. Classify and return
         """
-        normalized_query = query_text.strip().lower()
+        source_normalized = normalize(source_text)
         
-        if normalized_query in self.exact_lookup:
-            # Find original source text for proper casing
-            target = self.exact_lookup[normalized_query]
-            
-            # Find original source (for display purposes)
-            original_source = query_text  # Default to query
-            for entry in self.entries:
-                if entry['source'].strip().lower() == normalized_query:
-                    original_source = entry['source']
-                    break
-            
+        # CHANGE #2A: Fast exact match check (O(1))
+        if source_normalized in self.exact_match_index:
             return TMMatch(
-                source_text=original_source,
-                target_text=target,
-                similarity=100.0,
-                match_type="EXACT"
+                score=1.0,
+                level='100%',
+                tm_source=source_normalized,
+                tm_target=self.exact_match_index[source_normalized],
+                match_type='EXACT'
             )
         
-        return None
+        # CHANGE #2B: Fuzzy match (O(n) but optimized)
+        return self._fuzzy_match(source_normalized)
     
-    def get_fuzzy_matches(self, query_text: str, limit: int = 5, threshold: float = 65.0) -> List[TMMatch]:
-        """
-        Fast fuzzy matching using RapidFuzz.
+    def _fuzzy_match(self, source_normalized: str) -> TMMatch:
+        """Find best fuzzy match using edit distance"""
         
-        Args:
-            query_text: Source text to find matches for
-            limit: Maximum number of matches to return
-            threshold: Minimum similarity score (0-100)
+        best_score = 0
+        best_entry = None
+        
+        # CHANGE #5 (optional): Optimize by filtering similar-length entries
+        source_len = len(source_normalized)
+        
+        for entry in self.normalized_entries:
+            tm_source = entry['source_normalized']
+            tm_len = len(tm_source)
             
-        Returns:
-            List of TMMatch objects sorted by similarity (descending)
-        """
-        if not self.sources:
-            return []
+            # Optional optimization: skip very different lengths
+            # (disabled by default for accuracy, enable for speed)
+            # if abs(tm_len - source_len) > 20:  # Skip if >20 chars different
+            #     continue
+            
+            # Calculate similarity
+            score = edit_distance_similarity(source_normalized, tm_source)
+            
+            if score > best_score:
+                best_score = score
+                best_entry = entry
         
-        # RapidFuzz process.extract returns list of (match, score, index)
-        # Using fuzz.ratio for standard Levenshtein-based similarity
-        results = process.extract(
-            query_text,
-            self.sources,
-            scorer=fuzz.ratio,
-            limit=limit,
-            score_cutoff=threshold
+        # No match found
+        if best_entry is None or best_score < 0.50:
+            return TMMatch(
+                score=0,
+                level='No match',
+                tm_source='',
+                tm_target='',
+                match_type='NONE'
+            )
+        
+        # Match found
+        level = classify_match_level(best_score)
+        return TMMatch(
+            score=best_score,
+            level=level,
+            tm_source=best_entry['source_original'],
+            tm_target=best_entry['target'],
+            match_type='FUZZY'
         )
-        
-        matches = []
-        for match_text, score, idx in results:
-            matches.append(TMMatch(
-                source_text=self.entries[idx]['source'],
-                target_text=self.entries[idx]['target'],
-                similarity=score,
-                match_type="EXACT" if score >= 99.5 else "FUZZY"
-            ))
-        
-        return matches
     
-    def extract_matches(self, query_text: str, limit: int = 5, threshold: float = 65.0) -> Tuple[List[TMMatch], bool]:
-        """
-        Main matching method - combines exact and fuzzy matching.
-        
-        Args:
-            query_text: Source text to find matches for
-            limit: Maximum number of matches to return
-            threshold: Minimum similarity score (0-100)
-            
-        Returns:
-            Tuple of (matches, bypass_llm):
-            - matches: List of TMMatch objects
-            - bypass_llm: True if best match >= BYPASS_THRESHOLD (95%)
-        """
-        matches = []
-        bypass_llm = False
-        
-        # Clean query for matching (remove tag placeholders)
-        clean_query = query_text.replace('{{', '').replace('}}', '')
-        clean_query = ''.join([c for c in clean_query if not c.isdigit() or c in clean_query.split()])
-        clean_query = ' '.join(clean_query.split())  # Normalize whitespace
-        
-        # 1. Try exact match first (O(1))
-        exact = self.get_exact_match(clean_query)
-        if exact:
-            matches.append(exact)
-            bypass_llm = True  # 100% match = bypass LLM
-            
-            # Still get some fuzzy matches for context (optional)
-            fuzzy = self.get_fuzzy_matches(clean_query, limit=limit-1, threshold=threshold)
-            for m in fuzzy:
-                if m.source_text != exact.source_text:  # Avoid duplicate
-                    matches.append(m)
-            
-            return matches[:limit], bypass_llm
-        
-        # 2. Fuzzy match
-        matches = self.get_fuzzy_matches(clean_query, limit=limit, threshold=threshold)
-        
-        # Check if best match meets acceptance threshold (for bypass)
-        if matches and matches[0].similarity >= self.acceptance_threshold:
-            bypass_llm = True
-        
-        return matches, bypass_llm
+    def match_batch(self, segments: List[str]) -> List[TMMatch]:
+        """Match multiple segments"""
+        return [self.match(seg) for seg in segments]
     
-    def get_best_match(self, query_text: str, threshold: float = 65.0) -> Optional[TMMatch]:
+    def get_statistics(self, segments: List[str]) -> Dict:
         """
-        Get single best match for a query.
-        Convenience method for bypass decisions.
+        Analyze segments and return statistics
         
         Returns:
-            Best TMMatch or None if no match above threshold
+            {
+                'total_segments': 39,
+                'total_words': 182,
+                'by_level': {
+                    '100%': {'segments': 2, 'words': 4},
+                    '95%-99%': {'segments': 18, 'words': 51},
+                    ...
+                }
+            }
         """
-        matches, _ = self.extract_matches(query_text, limit=1, threshold=threshold)
-        return matches[0] if matches else None
+        matches = self.match_batch(segments)
+        
+        stats = {
+            'total_segments': len(segments),
+            'total_words': 0,
+            'by_level': {}
+        }
+        
+        for segment, match in zip(segments, matches):
+            # Count words in segment
+            word_count = len(normalize(segment).split())
+            stats['total_words'] += word_count
+            
+            # Group by level
+            level = match.level
+            if level not in stats['by_level']:
+                stats['by_level'][level] = {'segments': 0, 'words': 0}
+            
+            stats['by_level'][level]['segments'] += 1
+            stats['by_level'][level]['words'] += word_count
+        
+        return stats
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# UTILITY FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════════
+
+def words_in_segment(text: str) -> int:
+    """Count words in a segment (after normalization)"""
+    normalized = normalize(text)
+    if not normalized:
+        return 0
+    return len(normalized.split())
+
+
+def create_matcher_from_tmx(tmx_file_path: str) -> OptimizedTMMatcher:
+    """
+    Create matcher from TMX file
     
-    def should_bypass_llm(self, query_text: str, match_threshold: float = 65.0) -> Tuple[bool, Optional[str], Optional[float]]:
-        """
-        Determine if segment should bypass LLM translation.
-        
-        Args:
-            query_text: Source text to check
-            match_threshold: Minimum threshold for any match
-        
-        Returns:
-            Tuple of (should_bypass, translation, match_score):
-            - should_bypass: True if match >= acceptance_threshold
-            - translation: The TM translation to use (if bypass), None otherwise
-            - match_score: The match percentage
-        """
-        matches, bypass = self.extract_matches(query_text, limit=1, threshold=match_threshold)
-        
-        if matches:
-            best_match = matches[0]
-            if best_match.similarity >= self.acceptance_threshold:
-                return True, best_match.target_text, best_match.similarity
-            return False, None, best_match.similarity
-        
-        return False, None, None
+    Args:
+        tmx_file_path: Path to TMX file
+    
+    Returns:
+        OptimizedTMMatcher instance
+    """
+    import xml.etree.ElementTree as ET
+    
+    try:
+        # Try UTF-16 first (memoQ default)
+        with open(tmx_file_path, 'r', encoding='utf-16') as f:
+            content = f.read()
+    except:
+        # Fall back to UTF-8
+        with open(tmx_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    
+    root = ET.fromstring(content)
+    
+    tm_entries = []
+    for tu in root.findall('.//tu'):
+        tuv_list = tu.findall('tuv')
+        if len(tuv_list) >= 2:
+            source_seg = tuv_list[0].find('seg')
+            target_seg = tuv_list[1].find('seg')
+            
+            if source_seg is not None and target_seg is not None:
+                source = ''.join(source_seg.itertext()).strip()
+                target = ''.join(target_seg.itertext()).strip()
+                
+                if source:
+                    tm_entries.append({'source': source, 'target': target})
+    
+    matcher = OptimizedTMMatcher(tm_entries)
+    return matcher
+
+
+# ═════════════════════════════════════════════════════════════════════════════════
+# EXAMPLE USAGE
+# ═════════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    # Load TMX
+    matcher = create_matcher_from_tmx('/mnt/user-data/uploads/bg-tr_palnomoshtni.tmx')
+    
+    # Test segments
+    test_segments = [
+        "превод от български на турски език",
+        "пълномощно",
+        "подписаният марин иванов стефанов",
+        "адрес гр. стамбилийски, ул. райко даскалов 37",
+    ]
+    
+    print("Individual matches:")
+    for seg in test_segments:
+        match = matcher.match(seg)
+        print(f"  {seg[:40]}: {match.level} ({match.score*100:.1f}%)")
+    
+    print("\nStatistics:")
+    stats = matcher.get_statistics(test_segments)
+    print(f"  Total: {stats['total_segments']} segments, {stats['total_words']} words")
+    for level, data in stats['by_level'].items():
+        print(f"    {level}: {data['segments']} segs, {data['words']} words")

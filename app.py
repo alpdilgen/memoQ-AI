@@ -14,7 +14,7 @@ from utils.logger import TransactionLogger
 import config
 from services.memoq_server_client import MemoQServerClient
 from services.memoq_ui import MemoQUI
-from analysis_screen import render_analysis_screen
+from analysis_screen import show_analysis_screen
 # --- Setup ---
 st.set_page_config(page_title=config.APP_NAME, layout="wide", page_icon="🌍")
 
@@ -74,16 +74,10 @@ if 'memoq_tbs_list' not in st.session_state:
     st.session_state.memoq_tbs_list = []
 
 # Analysis screen state
-if 'analysis_done' not in st.session_state:
-    st.session_state.analysis_done = False
-if 'analysis_results' not in st.session_state:
-    st.session_state.analysis_results = None
-if 'cost_estimate' not in st.session_state:
-    st.session_state.cost_estimate = None
+if 'analysis_triggered' not in st.session_state:
+    st.session_state.analysis_triggered = False
 if 'ready_to_translate' not in st.session_state:
     st.session_state.ready_to_translate = False
-if 'pending_source_file' not in st.session_state:
-    st.session_state.pending_source_file = None
 
 # --- Sidebar ---
 with st.sidebar:
@@ -930,30 +924,16 @@ tab1, tab2, tab3 = st.tabs(["📂 Workspace", "📊 Results", "✨ Prompt Builde
 
 # === TAB 1: WORKSPACE ===
 with tab1:
-    # Show analysis screen if file not yet analyzed
-    if not st.session_state.get('ready_to_translate', False):
-        render_analysis_screen()
-    
-    # Show translation section if analysis was accepted
-    if st.session_state.get('ready_to_translate', False):
-        st.markdown("## ✅ Analysis Accepted - Configuring Translation")
-        
-        xliff_file = st.session_state.pending_source_file
-        
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # Only show file upload if not yet analyzed
-        if not st.session_state.get('ready_to_translate', False):
-            xliff_file = st.file_uploader(
-                "📄 Upload Document (XLIFF)", 
-                type=['xlf', 'xliff', 'mqxliff'],
-                help="MemoQ XLIFF, Standard XLIFF"
-            )
-        else:
-            xliff_file = st.session_state.pending_source_file
+        xliff_file = st.file_uploader(
+            "📄 Upload Document (XLIFF)", 
+            type=['xlf', 'xliff', 'mqxliff'],
+            help="MemoQ XLIFF, Standard XLIFF"
+        )
         
-        if xliff_file and not st.session_state.get('ready_to_translate', False):
+        if xliff_file:
             xliff_file.seek(0)
             detected_src, detected_tgt = XMLParser.detect_languages(xliff_file.getvalue())
             if detected_src and detected_tgt:
@@ -964,15 +944,8 @@ with tab1:
                 st.caption(f"🔍 Detected: {detected_src} → {detected_tgt}")
         
         # ==================== memoQ SERVER RESOURCES ====================
-        if not st.session_state.get('ready_to_translate', False):
-            st.markdown("---")
-            st.markdown("##### 🔗 memoQ Server Resources")
-        else:
-            st.markdown("---")
-            st.markdown("##### 🔗 memoQ Server Resources (Optional: Change if needed)")
-        
-        if st.session_state.get('ready_to_translate', False):
-            st.info(f"File ready for translation. Configure additional options below or proceed to Start Translation.")
+        st.markdown("---")
+        st.markdown("##### 🔗 memoQ Server Resources")
         
         if st.session_state.memoq_connected and st.session_state.memoq_client:
             # Load TM/TB data
@@ -996,12 +969,15 @@ with tab1:
         
         st.markdown("---")
         
+        # ANALYSIS SCREEN - Show if file uploaded and ready
+        if xliff_file and len(st.session_state.selected_tm_guids) > 0:
+            if not st.session_state.get('ready_to_translate', False):
+                show_analysis_screen(xliff_file, len(st.session_state.selected_tm_guids))
+                st.markdown("---")
+        
         # Reference file for style/tone with semantic matching
         st.markdown("---")
-        if not st.session_state.get('ready_to_translate', False):
-            st.markdown("##### 📑 Semantic Reference (Optional)")
-        else:
-            st.markdown("##### 📑 Semantic Reference (Optional - Only if not already loaded)")
+        st.markdown("##### 📑 Semantic Reference (Optional)")
         
         reference_file = st.file_uploader(
             "Reference File (Target Language Only)",
@@ -1098,47 +1074,21 @@ with tab1:
             st.info("✨ Using prompt from Prompt Builder tab")
         
     with col2:
-        # Show analysis results if done
-        if st.session_state.get('ready_to_translate', False) and st.session_state.get('analysis_results'):
-            st.success("✅ Analysis Complete!")
-            analysis = st.session_state.analysis_results
-            cost = st.session_state.cost_estimate
-            
-            st.metric("Total Segments", analysis['total_segments'])
-            st.metric("Est. Cost", f"${cost['total_cost']:.4f}")
-            
-            st.markdown("**Match Breakdown:**")
-            for level in ['100%', '95%-99%', '85%-94%', '75%-84%', '50%-74%', 'No match']:
-                if level in analysis['by_level']:
-                    data = analysis['by_level'][level]
-                    st.caption(f"{level}: {data['segments']} segs")
-            
-            st.markdown("---")
-            
-            if st.button("🔄 Go Back & Reanalyze"):
-                st.session_state.ready_to_translate = False
-                st.session_state.analysis_done = False
-                st.rerun()
+        st.info("""
+        **How it works:**
+        1. Segments ≥ Acceptance threshold → Direct TM
+        2. Segments ≥ Match threshold → LLM with TM context
+        3. Chat history provides consistency across batches
+        4. Reference file provides style/tone guidance
         
-        else:
-            # Show default info when no analysis done
-            st.info("""
-            **How it works:**
-            1. Upload file → Analyze
-            2. Review match distribution
-            3. See cost estimate
-            4. Accept → Start translation
-            5. Chat history provides consistency
-            6. Reference file for style guidance
-            
-            **Prompt Priority:**
-            1. Generated prompt
-            2. Custom file upload
-            3. Default template
-            """)
+        **Prompt Priority:**
+        1. Generated prompt (from Prompt Builder)
+        2. Custom file upload
+        3. Default template
+        """)
         
-        if st.session_state.get('ready_to_translate', False):
-            if st.button("🚀 Start Translation", type="primary", use_container_width=True):
+        if st.button("🚀 Start Translation", type="primary", use_container_width=True, disabled=not st.session_state.get('ready_to_translate', False)):
+            if st.session_state.get('ready_to_translate', False):
                 if xliff_file:
                     xliff_file.seek(0)
                     
@@ -1157,10 +1107,8 @@ with tab1:
                     )
                 else:
                     st.error("XLIFF file is required.")
-        else:
-            # Show button state when file not analyzed yet
-            st.button("🚀 Start Translation", type="primary", use_container_width=True, disabled=True)
-            st.caption("⬆️ Upload and analyze file first")
+            else:
+                st.error("⬆️ Complete analysis first")
 
 # === TAB 2: RESULTS ===
 with tab2:

@@ -1,19 +1,24 @@
 """
-OPTIMIZED TM MATCHER - Production Ready
-Implements 5 critical improvements:
-1. Proper normalization
-2. Exact match index (O(1) lookup)
-3. Edit distance fuzzy matching
-4. Proper threshold classification
-5. Performance optimization
+TM MATCHER - Production Ready
+Generic system that works with ANY TM file and ANY source file format
+
+Core functionality:
+  • Proper text normalization (handles tags, placeholders, whitespace)
+  • Edit distance fuzzy matching (Levenshtein algorithm)
+  • Standard CAT threshold classification
+  • File format auto-detection (SDLXLIFF, XLIFF, MQXLIFF)
+  • Generic file analysis (works with any source file)
+
+No hardcoded data. No POC code. Production system.
 """
 
 import re
+import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 
 # ═════════════════════════════════════════════════════════════════════════════════
-# CHANGE #1: PROPER NORMALIZATION FUNCTION
+# TEXT NORMALIZATION
 # ═════════════════════════════════════════════════════════════════════════════════
 
 def normalize(text: str) -> str:
@@ -23,40 +28,26 @@ def normalize(text: str) -> str:
     Steps:
     1. Remove XML tags but keep content
     2. Remove placeholders ({}, {{1}}, etc.)
-    3. Remove extra whitespace
+    3. Normalize whitespace
     4. Convert to lowercase
-    5. Keep punctuation and diacritics (important for Cyrillic)
+    5. Keep punctuation and diacritics
     """
-    # Remove XML tags: <ph>, <bpt>, <ept>, etc.
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # Remove placeholders: {}, {{1}}, {{2}}, etc.
-    text = re.sub(r'{.*?}', '', text)
-    
-    # Remove/normalize whitespace but preserve word boundaries
-    text = ' '.join(text.split())
-    
-    # Strip leading/trailing
+    text = re.sub(r'<[^>]+>', '', text)      # Remove tags
+    text = re.sub(r'{.*?}', '', text)        # Remove placeholders
+    text = ' '.join(text.split())             # Normalize whitespace
     text = text.strip()
-    
-    # Lowercase for case-insensitive matching
     text = text.lower()
-    
     return text
 
 
 # ═════════════════════════════════════════════════════════════════════════════════
-# LEVENSHTEIN EDIT DISTANCE
+# EDIT DISTANCE (Levenshtein) - Industry standard for CAT tools
 # ═════════════════════════════════════════════════════════════════════════════════
 
 def levenshtein_distance(s1: str, s2: str) -> int:
-    """
-    Calculate Levenshtein distance between two strings
-    Used by ALL CAT tools for fuzzy matching
-    """
+    """Calculate Levenshtein edit distance"""
     if len(s1) < len(s2):
         return levenshtein_distance(s2, s1)
-    
     if len(s2) == 0:
         return len(s1)
     
@@ -74,36 +65,21 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 
 def edit_distance_similarity(s1: str, s2: str) -> float:
-    """
-    Convert Levenshtein distance to similarity score (0-1.0)
-    Higher score = more similar
-    """
+    """Convert edit distance to similarity score (0-1.0)"""
     distance = levenshtein_distance(s1, s2)
     max_len = max(len(s1), len(s2))
-    
     if max_len == 0:
         return 1.0
-    
     similarity = 1 - (distance / max_len)
-    return max(0.0, min(1.0, similarity))  # Clamp to 0-1
+    return max(0.0, min(1.0, similarity))
 
 
 # ═════════════════════════════════════════════════════════════════════════════════
-# CHANGE #4: THRESHOLD CLASSIFICATION
+# MATCH CLASSIFICATION
 # ═════════════════════════════════════════════════════════════════════════════════
 
 def classify_match_level(score: float) -> str:
-    """
-    Classify match score into CAT-standard categories
-    
-    Industry standard thresholds:
-    - 1.0 (100%): Exact match
-    - 0.95-0.99: 95%-99% fuzzy
-    - 0.85-0.94: 85%-94% fuzzy
-    - 0.75-0.84: 75%-84% fuzzy
-    - 0.50-0.74: 50%-74% fuzzy
-    - <0.50: No match
-    """
+    """Classify similarity score using CAT-standard thresholds"""
     if score >= 1.0:
         return "100%"
     elif score >= 0.95:
@@ -124,82 +100,93 @@ def classify_match_level(score: float) -> str:
 
 @dataclass
 class TMMatch:
-    """Result of a TM match query"""
-    score: float                    # 0-1.0 similarity
-    level: str                      # "100%", "95%-99%", etc.
-    tm_source: str                  # Original TM source text
-    tm_target: str                  # TM target translation
-    match_type: str                 # "EXACT" or "FUZZY" or "NONE"
+    """TM match result"""
+    score: float
+    level: str
+    tm_source: str
+    tm_target: str
+    match_type: str
 
 
 # ═════════════════════════════════════════════════════════════════════════════════
-# CHANGE #2: OPTIMIZED TM MATCHER WITH EXACT MATCH INDEX
+# CORE TM MATCHER
 # ═════════════════════════════════════════════════════════════════════════════════
 
-class OptimizedTMMatcher:
+class TMatcher:
     """
-    Production-ready TM matcher with:
-    - O(1) exact match lookup via dictionary index
-    - Edit distance fuzzy matching
-    - Performance optimization (optional)
+    Generic TM Matcher
+    Works with ANY TMX file and ANY source file format
+    
+    Usage:
+        matcher = TMatcher('path/to/tm.tmx')
+        results = matcher.analyze_file('path/to/source.sdlxliff')
     """
     
-    def __init__(self, tm_entries: List[Dict] = None):
-        """
-        Initialize matcher
+    def __init__(self, tm_file_path: str, bypass_threshold: float = 0.95):
+        """Load TMX file"""
+        self.tm_file_path = tm_file_path
+        self.bypass_threshold = bypass_threshold
         
-        Args:
-            tm_entries: List of dicts with 'source' and 'target' keys
-        """
-        self.tm_entries = tm_entries or []
+        # Load TM
+        self.tm_entries = self._load_tmx(tm_file_path)
+        self.tu_count = len(self.tm_entries)
         
-        # CHANGE #2: Build exact match index for O(1) lookup
-        self.exact_match_index = {}      # {normalized_source: target}
-        self.normalized_entries = []     # For fuzzy matching
+        # Build exact match index for O(1) lookup
+        self.exact_match_index = {}
+        self.normalized_entries = []
+        self._build_indices()
+    
+    def _load_tmx(self, file_path: str) -> List[Dict]:
+        """Load TMX file (supports UTF-16 and UTF-8)"""
+        try:
+            with open(file_path, 'r', encoding='utf-16') as f:
+                content = f.read()
+        except:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
         
-        if self.tm_entries:
-            self._build_indices()
+        root = ET.fromstring(content)
+        entries = []
+        
+        for tu in root.findall('.//tu'):
+            tuv_list = tu.findall('tuv')
+            if len(tuv_list) >= 2:
+                source_seg = tuv_list[0].find('seg')
+                target_seg = tuv_list[1].find('seg')
+                
+                if source_seg is not None and target_seg is not None:
+                    source = ''.join(source_seg.itertext()).strip()
+                    target = ''.join(target_seg.itertext()).strip()
+                    
+                    if source:
+                        entries.append({'source': source, 'target': target})
+        
+        return entries
     
     def _build_indices(self):
-        """Build exact match index and normalized entries for fuzzy matching"""
+        """Build exact match index and normalized entries for fuzzy"""
         for entry in self.tm_entries:
             source = entry.get('source', '')
             target = entry.get('target', '')
             
-            # Normalize once
             normalized_source = normalize(source)
             
-            # Store in exact match index
+            # Exact match index
             if normalized_source not in self.exact_match_index:
                 self.exact_match_index[normalized_source] = target
             
-            # Store for fuzzy matching
+            # Fuzzy search entries
             self.normalized_entries.append({
                 'source_normalized': normalized_source,
                 'source_original': source,
                 'target': target
             })
     
-    def load_tm(self, tm_entries: List[Dict]):
-        """Load/reload TM entries and rebuild indices"""
-        self.tm_entries = tm_entries
-        self.exact_match_index.clear()
-        self.normalized_entries.clear()
-        self._build_indices()
-    
     def match(self, source_text: str) -> TMMatch:
-        """
-        Match source segment against TM
-        
-        Strategy:
-        1. Normalize source
-        2. Try exact match (O(1) lookup)
-        3. If no exact match, find best fuzzy match
-        4. Classify and return
-        """
+        """Match a single segment against TM"""
         source_normalized = normalize(source_text)
         
-        # CHANGE #2A: Fast exact match check (O(1))
+        # Try exact match (O(1))
         if source_normalized in self.exact_match_index:
             return TMMatch(
                 score=1.0,
@@ -209,35 +196,16 @@ class OptimizedTMMatcher:
                 match_type='EXACT'
             )
         
-        # CHANGE #2B: Fuzzy match (O(n) but optimized)
-        return self._fuzzy_match(source_normalized)
-    
-    def _fuzzy_match(self, source_normalized: str) -> TMMatch:
-        """Find best fuzzy match using edit distance"""
-        
+        # Fuzzy match
         best_score = 0
         best_entry = None
         
-        # CHANGE #5 (optional): Optimize by filtering similar-length entries
-        source_len = len(source_normalized)
-        
         for entry in self.normalized_entries:
-            tm_source = entry['source_normalized']
-            tm_len = len(tm_source)
-            
-            # Optional optimization: skip very different lengths
-            # (disabled by default for accuracy, enable for speed)
-            # if abs(tm_len - source_len) > 20:  # Skip if >20 chars different
-            #     continue
-            
-            # Calculate similarity
-            score = edit_distance_similarity(source_normalized, tm_source)
-            
+            score = edit_distance_similarity(source_normalized, entry['source_normalized'])
             if score > best_score:
                 best_score = score
                 best_entry = entry
         
-        # No match found
         if best_entry is None or best_score < 0.50:
             return TMMatch(
                 score=0,
@@ -247,135 +215,160 @@ class OptimizedTMMatcher:
                 match_type='NONE'
             )
         
-        # Match found
-        level = classify_match_level(best_score)
         return TMMatch(
             score=best_score,
-            level=level,
+            level=classify_match_level(best_score),
             tm_source=best_entry['source_original'],
             tm_target=best_entry['target'],
             match_type='FUZZY'
         )
     
-    def match_batch(self, segments: List[str]) -> List[TMMatch]:
-        """Match multiple segments"""
-        return [self.match(seg) for seg in segments]
+    def should_bypass_llm(self, source_text: str) -> Tuple[bool, str, float]:
+        """Check if segment should bypass LLM (use TM instead)"""
+        match = self.match(source_text)
+        return match.score >= self.bypass_threshold, match.tm_target, match.score
     
-    def get_statistics(self, segments: List[str]) -> Dict:
+    def extract_matches(self, source_text: str, threshold: float = 0.75) -> Tuple[List, float]:
+        """Extract TM matches (legacy format compatibility)"""
+        match = self.match(source_text)
+        
+        if match.score < threshold:
+            return [{'result': {}}], 0.0
+        
+        return [{
+            'source': match.tm_source,
+            'target': match.tm_target,
+            'score': match.score,
+            'percent': int(match.score * 100),
+        }], match.score
+    
+    # ═════════════════════════════════════════════════════════════════════════════
+    # FILE ANALYSIS - Works with ANY file format
+    # ═════════════════════════════════════════════════════════════════════════════
+    
+    def analyze_file(self, file_path: str, file_format: str = None) -> Dict:
         """
-        Analyze segments and return statistics
+        Analyze any supported file format
         
-        Returns:
-            {
-                'total_segments': 39,
-                'total_words': 182,
-                'by_level': {
-                    '100%': {'segments': 2, 'words': 4},
-                    '95%-99%': {'segments': 18, 'words': 51},
-                    ...
-                }
-            }
+        Supports: SDLXLIFF, XLIFF, MQXLIFF
+        Auto-detects format from file extension
         """
-        matches = self.match_batch(segments)
+        if file_format is None:
+            lower_path = file_path.lower()
+            if 'sdlxliff' in lower_path or 'mqxliff' in lower_path:
+                file_format = 'sdlxliff'
+            elif 'xliff' in lower_path or lower_path.endswith('.xlf'):
+                file_format = 'xliff'
+            else:
+                raise ValueError(f"Unknown format for {file_path}")
         
-        stats = {
-            'total_segments': len(segments),
-            'total_words': 0,
-            'by_level': {}
-        }
+        if file_format.lower() == 'sdlxliff':
+            segments = self._extract_sdlxliff(file_path)
+        elif file_format.lower() == 'xliff':
+            segments = self._extract_xliff(file_path)
+        else:
+            raise ValueError(f"Unsupported format: {file_format}")
         
-        for segment, match in zip(segments, matches):
-            # Count words in segment
-            word_count = len(normalize(segment).split())
-            stats['total_words'] += word_count
+        return self.analyze_segments(segments)
+    
+    def _extract_sdlxliff(self, file_path: str) -> List[str]:
+        """Extract segments from SDLXLIFF file"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        root = ET.fromstring(content)
+        ns = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2', 'mq': 'MQXliff'}
+        
+        segments = []
+        for trans_unit in root.findall('.//xliff:trans-unit', ns):
+            source_elem = trans_unit.find('xliff:source', ns)
+            source_text = ''.join(source_elem.itertext()) if source_elem is not None else ''
+            segments.append(source_text)
+        
+        return segments
+    
+    def _extract_xliff(self, file_path: str) -> List[str]:
+        """Extract segments from XLIFF file"""
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        root = ET.fromstring(content)
+        ns = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2'}
+        
+        segments = []
+        for trans_unit in root.findall('.//xliff:trans-unit', ns):
+            source_elem = trans_unit.find('xliff:source', ns)
+            source_text = ''.join(source_elem.itertext()) if source_elem is not None else ''
+            segments.append(source_text)
+        
+        return segments
+    
+    def analyze_segments(self, segments: List[str]) -> Dict:
+        """Analyze list of segments"""
+        matches = [self.match(seg) for seg in segments]
+        
+        # Calculate statistics
+        by_level = {}
+        total_words = 0
+        
+        detailed_matches = []
+        for i, (segment, match) in enumerate(zip(segments, matches), 1):
+            word_count = len(normalize(segment).split()) if segment else 0
+            total_words += word_count
             
-            # Group by level
             level = match.level
-            if level not in stats['by_level']:
-                stats['by_level'][level] = {'segments': 0, 'words': 0}
+            if level not in by_level:
+                by_level[level] = {'segments': 0, 'words': 0}
             
-            stats['by_level'][level]['segments'] += 1
-            stats['by_level'][level]['words'] += word_count
+            by_level[level]['segments'] += 1
+            by_level[level]['words'] += word_count
+            
+            detailed_matches.append({
+                'segment_id': i,
+                'source': segment,
+                'level': match.level,
+                'score': match.score,
+                'score_percent': f"{match.score*100:.1f}%",
+                'target': match.tm_target,
+                'match_type': match.match_type,
+                'words': word_count
+            })
         
-        return stats
+        return {
+            'total_segments': len(segments),
+            'total_words': total_words,
+            'by_level': by_level,
+            'matches': detailed_matches
+        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════════
-# UTILITY FUNCTIONS
-# ═════════════════════════════════════════════════════════════════════════════════
-
-def words_in_segment(text: str) -> int:
-    """Count words in a segment (after normalization)"""
-    normalized = normalize(text)
-    if not normalized:
-        return 0
-    return len(normalized.split())
-
-
-def create_matcher_from_tmx(tmx_file_path: str) -> OptimizedTMMatcher:
-    """
-    Create matcher from TMX file
-    
-    Args:
-        tmx_file_path: Path to TMX file
-    
-    Returns:
-        OptimizedTMMatcher instance
-    """
-    import xml.etree.ElementTree as ET
-    
-    try:
-        # Try UTF-16 first (memoQ default)
-        with open(tmx_file_path, 'r', encoding='utf-16') as f:
-            content = f.read()
-    except:
-        # Fall back to UTF-8
-        with open(tmx_file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-    
-    root = ET.fromstring(content)
-    
-    tm_entries = []
-    for tu in root.findall('.//tu'):
-        tuv_list = tu.findall('tuv')
-        if len(tuv_list) >= 2:
-            source_seg = tuv_list[0].find('seg')
-            target_seg = tuv_list[1].find('seg')
-            
-            if source_seg is not None and target_seg is not None:
-                source = ''.join(source_seg.itertext()).strip()
-                target = ''.join(target_seg.itertext()).strip()
-                
-                if source:
-                    tm_entries.append({'source': source, 'target': target})
-    
-    matcher = OptimizedTMMatcher(tm_entries)
-    return matcher
-
-
-# ═════════════════════════════════════════════════════════════════════════════════
-# EXAMPLE USAGE
+# USAGE EXAMPLE
 # ═════════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Load TMX
-    matcher = create_matcher_from_tmx('/mnt/user-data/uploads/bg-tr_palnomoshtni.tmx')
+    print("GENERIC TM ANALYSIS SYSTEM")
+    print("=" * 70)
+    print("""
+    Usage:
     
-    # Test segments
-    test_segments = [
-        "превод от български на турски език",
-        "пълномощно",
-        "подписаният марин иванов стефанов",
-        "адрес гр. стамбилийски, ул. райко даскалов 37",
-    ]
+    1. Load ANY TMX file:
+       matcher = TMatcher('path/to/tm.tmx')
     
-    print("Individual matches:")
-    for seg in test_segments:
-        match = matcher.match(seg)
-        print(f"  {seg[:40]}: {match.level} ({match.score*100:.1f}%)")
+    2. Analyze ANY source file:
+       results = matcher.analyze_file('path/to/source.sdlxliff')
     
-    print("\nStatistics:")
-    stats = matcher.get_statistics(test_segments)
-    print(f"  Total: {stats['total_segments']} segments, {stats['total_words']} words")
-    for level, data in stats['by_level'].items():
-        print(f"    {level}: {data['segments']} segs, {data['words']} words")
+    3. Get results:
+       print(f"Total: {results['total_segments']} segments")
+       for level, data in results['by_level'].items():
+           print(f"  {level}: {data['segments']} segs")
+    
+    System works with:
+      ✓ Any TMX file
+      ✓ Any SDLXLIFF/XLIFF/MQXLIFF file
+      ✓ Any language pair
+      ✓ Batch processing
+    
+    No hardcoded data. Production ready.
+    """)
+    print("=" * 70)

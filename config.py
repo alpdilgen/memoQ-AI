@@ -30,6 +30,21 @@ SUPPORTED_LANGUAGES = {
     'swe': 'Swedish',
     
     # Major World Languages
+    'ara': 'Arabic',
+    'zho': 'Chinese (Simplified)',
+    'zht': 'Chinese (Traditional)',
+    'jpn': 'Japanese',
+    'kor': 'Korean',
+    'rus': 'Russian',
+    'tur': 'Turkish',
+    'hin': 'Hindi',
+    'ben': 'Bengali',
+    'vie': 'Vietnamese',
+    'tha': 'Thai',
+    'afr': 'Afrikaans',
+    'heb': 'Hebrew',
+    'ukr': 'Ukrainian',
+    'nor': 'Norwegian',
 }
 
 # OpenAI Models

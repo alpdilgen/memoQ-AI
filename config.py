@@ -1,46 +1,69 @@
-# config.py
-import os
+# Configuration for Enhanced Translation Assistant
 
-# Application Settings
-APP_NAME = "Enhanced Translation Assistant"
-VERSION = "1.0.0"
-
-# Language Settings - Keys are memoQ 3-letter codes
+# Supported languages - EU languages + major world languages
+# Format: 'language_code': 'Language Name'
 SUPPORTED_LANGUAGES = {
-    "bul": "Bulgarian",
-    "eng": "English",
-    "eng-GB": "English (UK)",
-    "eng-US": "English (US)",
-    "eng-AU": "English (Australia)",
-    "eng-CA": "English (Canada)",
-    "eng-IE": "English (Ireland)",
-    "eng-NZ": "English (New Zealand)",
-    "eng-ZA": "English (South Africa)",
-    "ger": "German",
-    "fra": "French",
-    "spa": "Spanish",
-    "ita": "Italian",
-    "ron": "Romanian",
-    "tur": "Turkish",
-    "ces": "Czech",
-    "pol": "Polish",
-    "nld": "Dutch",
-    "por": "Portuguese"
+    # EU Languages
+    'bul': 'Bulgarian',
+    'hrv': 'Croatian',
+    'ces': 'Czech',
+    'dan': 'Danish',
+    'nld': 'Dutch',
+    'eng': 'English',
+    'est': 'Estonian',
+    'fin': 'Finnish',
+    'fra': 'French',
+    'deu': 'German',
+    'ell': 'Greek',
+    'hun': 'Hungarian',
+    'gle': 'Irish',
+    'ita': 'Italian',
+    'lav': 'Latvian',
+    'lit': 'Lithuanian',
+    'mlt': 'Maltese',
+    'pol': 'Polish',
+    'por': 'Portuguese',
+    'ron': 'Romanian',
+    'slk': 'Slovak',
+    'slv': 'Slovenian',
+    'spa': 'Spanish',
+    'swe': 'Swedish',
+    
+    # Major World Languages
 }
 
-# Processing Settings
-BATCH_SIZE = 20  # Segments per AI request
-DEFAULT_MATCH_THRESHOLD = 70       # Minimum for TM context (sent to LLM)
-DEFAULT_ACCEPTANCE_THRESHOLD = 95  # Minimum for direct TM usage (bypass LLM)
-DEFAULT_CHAT_HISTORY = 5           # Number of previous batches to include as context
-DEFAULT_TEMPERATURE = 0.1
-MAX_TOKENS = 4000
-TIMEOUT_SECONDS = 45
-MAX_RETRIES = 3
+# OpenAI Models
+OPENAI_MODELS = [
+    'gpt-4o',
+    'gpt-4-turbo',
+]
 
-# AI Model Settings
-OPENAI_MODELS = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini", "o3", "o4-mini"]
+# Default values
+DEFAULT_SOURCE_LANGUAGE = 'eng'
+DEFAULT_TARGET_LANGUAGE = 'tur'
+DEFAULT_MODEL = 'gpt-4o'
 
-# File Paths
-RESOURCES_DIR = "resources"
-PROMPT_TEMPLATE_PATH = os.path.join(RESOURCES_DIR, "prompt Template.txt")
+# Translation settings
+ACCEPTANCE_THRESHOLD = 95  # % - bypass segments at this match or higher
+MATCH_THRESHOLD = 70       # % - use fuzzy match for TM context
+CHAT_HISTORY_LENGTH = 5    # segments to include in history for consistency
+
+# API Settings
+OPENAI_API_BASE = "https://api.openai.com/v1"
+
+# App name
+APP_NAME = "Enhanced Translation Assistant"
+
+# UI Settings
+LAYOUT = "wide"
+THEME = "light"
+
+# Batch processing
+DEFAULT_BATCH_SIZE = 20
+MAX_BATCH_SIZE = 50
+
+# Cost calculation
+TOKENS_PER_SEGMENT = 100
+GPT_4O_INPUT_PRICE = 0.00025   # per token
+GPT_4O_OUTPUT_PRICE = 0.001    # per token
+CONTEXT_DISCOUNT = 0.5         # 50% discount for fuzzy match segments

@@ -10,6 +10,7 @@ SUPPORTED_LANGUAGES = {
     'dan': 'Danish',
     'nld': 'Dutch',
     'eng': 'English',
+    'en-gb': 'English (UK)',
     'est': 'Estonian',
     'fin': 'Finnish',
     'fra': 'French',

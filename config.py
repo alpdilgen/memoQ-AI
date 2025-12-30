@@ -59,9 +59,9 @@ DEFAULT_TARGET_LANGUAGE = 'tur'
 DEFAULT_MODEL = 'gpt-4o'
 
 # Translation settings
-ACCEPTANCE_THRESHOLD = 95  # % - bypass segments at this match or higher
-MATCH_THRESHOLD = 70       # % - use fuzzy match for TM context
-CHAT_HISTORY_LENGTH = 5    # segments to include in history for consistency
+DEFAULT_ACCEPTANCE_THRESHOLD = 95      # % - bypass segments at this match or higher
+DEFAULT_MATCH_THRESHOLD = 70           # % - use fuzzy match for TM context
+DEFAULT_CHAT_HISTORY = 5               # segments to include in history for consistency
 
 # API Settings
 OPENAI_API_BASE = "https://api.openai.com/v1"
@@ -82,3 +82,6 @@ TOKENS_PER_SEGMENT = 100
 GPT_4O_INPUT_PRICE = 0.00025   # per token
 GPT_4O_OUTPUT_PRICE = 0.001    # per token
 CONTEXT_DISCOUNT = 0.5         # 50% discount for fuzzy match segments
+
+# Prompt template
+PROMPT_TEMPLATE_PATH = None  # Set to file path if using custom template, None for default
